@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import Card from '../../components/ui/Card';
 import Button from '../../components/ui/Button';
@@ -9,6 +9,7 @@ import { resultSessionsApi } from '../../api/resultSessionsApi';
 
 const STEPS = ['Exam Details', 'Select Students', 'Subjects', 'Review & Activate'];
 const EXAM_TYPES = ['Monthly Test', 'Mid Term', 'Final Term', 'Annual Examination', 'Pre-Board', 'Board Preparation', 'Other'];
+const NO_SECTION = '__none__'; // dropdown sentinel for students with no section set
 
 export default function CreateResultSessionWizard() {
   const navigate = useNavigate();
@@ -20,12 +21,69 @@ export default function CreateResultSessionWizard() {
     class: '', section: '', schoolName: '', schoolAddress: '', schoolPhone: '',
   });
 
+  // Class/Section/Academic Year are picked from the teacher's ACTUAL
+  // registered groups, never free-typed -- a typo here used to mean the
+  // roster query silently matched nothing, with no indication why.
+  const [groups, setGroups] = useState(null); // null = still loading
+  const [loadingGroups, setLoadingGroups] = useState(true);
+
   const [roster, setRoster] = useState([]);
   const [loadingRoster, setLoadingRoster] = useState(false);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [rosterSearch, setRosterSearch] = useState('');
 
   const [subjects, setSubjects] = useState([{ name: '', totalMarks: 100, passingMarks: 40, allowSubmitterConfig: false }]);
+
+  useEffect(() => {
+    studentsApi
+      .groups()
+      .then(({ data }) => {
+        setGroups(data);
+        // If the teacher only has one class/section/year combination
+        // registered, there's nothing to actually choose -- select it
+        // automatically so they aren't clicking through a dropdown of one.
+        if (data.length === 1) {
+          setExamDetails((prev) => ({
+            ...prev,
+            class: data[0].class,
+            section: data[0].section || '',
+            academicYear: data[0].academicYear,
+          }));
+        }
+      })
+      .finally(() => setLoadingGroups(false));
+  }, []);
+
+  const classOptions = useMemo(
+    () => [...new Set((groups || []).map((g) => g.class))],
+    [groups]
+  );
+  const sectionOptions = useMemo(
+    () =>
+      [...new Set((groups || []).filter((g) => g.class === examDetails.class).map((g) => g.section || ''))],
+    [groups, examDetails.class]
+  );
+  const yearOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          (groups || [])
+            .filter((g) => g.class === examDetails.class && (g.section || '') === examDetails.section)
+            .map((g) => g.academicYear)
+        ),
+      ],
+    [groups, examDetails.class, examDetails.section]
+  );
+
+  function handleClassChange(value) {
+    // Changing the class invalidates whatever section/year was picked --
+    // reset both rather than leaving a stale combination selected.
+    setExamDetails((prev) => ({ ...prev, class: value, section: '', academicYear: '' }));
+  }
+  function handleSectionChange(value) {
+    const section = value === NO_SECTION ? '' : value;
+    setExamDetails((prev) => ({ ...prev, section, academicYear: '' }));
+  }
 
   function loadRoster() {
     if (!examDetails.class) return;
@@ -63,7 +121,7 @@ export default function CreateResultSessionWizard() {
   function goNext() {
     if (step === 0) {
       if (!examDetails.class || !examDetails.academicYear || !examDetails.examType || !examDetails.resultDate) {
-        toast.error('Please fill in Class, Academic Year, Exam Type and Result Date');
+        toast.error('Please select Class, Section/Year, Exam Type and Result Date');
         return;
       }
     }
@@ -124,21 +182,68 @@ export default function CreateResultSessionWizard() {
       </div>
 
       {step === 0 && (
-        <Card className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Input label="Exam Name (optional)" value={examDetails.examName} onChange={(e) => setExamDetails({ ...examDetails, examName: e.target.value })} />
-          <div className="flex flex-col gap-1">
-            <label className="text-sm font-medium text-slate-700">Exam Type</label>
-            <select className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={examDetails.examType}
-              onChange={(e) => setExamDetails({ ...examDetails, examType: e.target.value })}>
-              {EXAM_TYPES.map((t) => <option key={t}>{t}</option>)}
-            </select>
+        <Card className="space-y-4">
+          {!loadingGroups && classOptions.length === 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              You haven't registered any students yet.{' '}
+              <Link to="/students" className="font-medium underline">Add students first</Link>, then come back here.
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Input label="Exam Name (optional)" value={examDetails.examName} onChange={(e) => setExamDetails({ ...examDetails, examName: e.target.value })} />
+            <div className="flex flex-col gap-1">
+              <label className="text-sm font-medium text-slate-700">Exam Type</label>
+              <select className="rounded-lg border border-slate-300 px-3 py-2 text-sm" value={examDetails.examType}
+                onChange={(e) => setExamDetails({ ...examDetails, examType: e.target.value })}>
+                {EXAM_TYPES.map((t) => <option key={t}>{t}</option>)}
+              </select>
+            </div>
+            <Input label="Result Date" type="date" required value={examDetails.resultDate} onChange={(e) => setExamDetails({ ...examDetails, resultDate: e.target.value })} />
+
+            <div className="flex flex-col gap-1">
+              <label className="text-sm font-medium text-slate-700">Class</label>
+              <select
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-400"
+                value={examDetails.class}
+                disabled={loadingGroups || classOptions.length === 0}
+                onChange={(e) => handleClassChange(e.target.value)}
+              >
+                <option value="">{loadingGroups ? 'Loading...' : 'Select a class'}</option>
+                {classOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-sm font-medium text-slate-700">Section</label>
+              <select
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-400"
+                value={examDetails.section || (examDetails.class ? NO_SECTION : '')}
+                disabled={!examDetails.class}
+                onChange={(e) => handleSectionChange(e.target.value)}
+              >
+                {sectionOptions.map((s) => (
+                  <option key={s || NO_SECTION} value={s || NO_SECTION}>{s || '(No section)'}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-sm font-medium text-slate-700">Academic Year</label>
+              <select
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50 disabled:text-slate-400"
+                value={examDetails.academicYear}
+                disabled={!examDetails.class}
+                onChange={(e) => setExamDetails({ ...examDetails, academicYear: e.target.value })}
+              >
+                <option value="">Select year</option>
+                {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
+
+            <Input label="School Name (optional)" value={examDetails.schoolName} onChange={(e) => setExamDetails({ ...examDetails, schoolName: e.target.value })} />
+            <Input label="School Address (optional)" value={examDetails.schoolAddress} onChange={(e) => setExamDetails({ ...examDetails, schoolAddress: e.target.value })} />
           </div>
-          <Input label="Result Date" type="date" required value={examDetails.resultDate} onChange={(e) => setExamDetails({ ...examDetails, resultDate: e.target.value })} />
-          <Input label="Academic Year" required value={examDetails.academicYear} onChange={(e) => setExamDetails({ ...examDetails, academicYear: e.target.value })} />
-          <Input label="Class" required value={examDetails.class} onChange={(e) => setExamDetails({ ...examDetails, class: e.target.value })} />
-          <Input label="Section" value={examDetails.section} onChange={(e) => setExamDetails({ ...examDetails, section: e.target.value })} />
-          <Input label="School Name (optional)" value={examDetails.schoolName} onChange={(e) => setExamDetails({ ...examDetails, schoolName: e.target.value })} />
-          <Input label="School Address (optional)" value={examDetails.schoolAddress} onChange={(e) => setExamDetails({ ...examDetails, schoolAddress: e.target.value })} />
         </Card>
       )}
 
@@ -156,7 +261,7 @@ export default function CreateResultSessionWizard() {
           <Input placeholder="Search students" value={rosterSearch} onChange={(e) => setRosterSearch(e.target.value)} className="mb-3" />
           {roster.length === 0 && !loadingRoster && (
             <p className="text-sm text-slate-500">
-              No students found for this class/section/year. Add students on the Students page first.
+              No active students found for this exact class/section/year combination.
             </p>
           )}
           <div className="max-h-96 space-y-1 overflow-y-auto">
