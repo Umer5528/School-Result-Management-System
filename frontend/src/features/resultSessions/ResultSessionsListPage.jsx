@@ -43,9 +43,9 @@ export default function ResultSessionsListPage() {
         <EmptyState title="No result sessions yet" description="Create one to start collecting subject-wise marks from external submitters." />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {items.map((s) => (
+          {items.map((s, i) => (
             <Link key={s._id} to={`/result-sessions/${s._id}`}>
-              <Card className="h-full hover:border-brand-300">
+              <Card hoverable className="h-full animate-fadeInUp" style={{ animationDelay: `${i * 40}ms` }}>
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <p className="font-semibold text-slate-800">{s.examName || s.examType}</p>

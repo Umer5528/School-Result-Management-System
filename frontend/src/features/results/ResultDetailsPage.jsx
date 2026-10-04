@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { Download, FileSpreadsheet, Pencil } from 'lucide-react';
+import { Download, FileSpreadsheet, Pencil, Trash2 } from 'lucide-react';
 import { resultsApi } from '../../api/resultsApi';
 import { useAuth } from '../../context/AuthContext';
 import Card from '../../components/ui/Card';
@@ -9,9 +9,11 @@ import Skeleton from '../../components/ui/Skeleton';
 import StatusBadge from '../../components/ui/StatusBadge';
 import Button from '../../components/ui/Button';
 import Modal from '../../components/ui/Modal';
+import PermanentDeleteModal from '../../components/ui/PermanentDeleteModal';
 
 export default function ResultDetailsPage() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const { user, hasPermission } = useAuth();
   const [result, setResult] = useState(null);
   const [downloading, setDownloading] = useState(null); // 'pdf' | 'excel' | null
@@ -20,6 +22,9 @@ export default function ResultDetailsPage() {
   const [overrideChoice, setOverrideChoice] = useState('PASS');
   const [overrideReason, setOverrideReason] = useState('');
   const [savingOverride, setSavingOverride] = useState(false);
+
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   useEffect(() => {
     resultsApi.get(id).then(({ data }) => setResult(data.result));
@@ -80,7 +85,24 @@ export default function ResultDetailsPage() {
 
   const isOwner = result.createdBy === user.id;
   const canOverride = isOwner || hasPermission('MANAGE_RESULTS');
+  const canDelete =
+    isOwner ||
+    user?.role === 'super_admin' ||
+    (user?.role === 'assistant_admin' && hasPermission('MANAGE_RESULTS'));
   const sorted = [...result.students].sort((a, b) => a.position - b.position);
+
+  async function handlePermanentDelete() {
+    setDeleteBusy(true);
+    try {
+      await resultsApi.permanentDelete(id);
+      toast.success('Result permanently deleted');
+      navigate('/results');
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to delete result');
+    } finally {
+      setDeleteBusy(false);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -96,13 +118,22 @@ export default function ResultDetailsPage() {
               Class {result.class}{result.section ? ` - ${result.section}` : ''} • {new Date(result.resultDate).toLocaleDateString()}
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => handleDownload('pdf')} disabled={downloading === 'pdf'}>
               <Download size={16} /> {downloading === 'pdf' ? 'Preparing...' : 'PDF'}
             </Button>
             <Button variant="secondary" onClick={() => handleDownload('excel')} disabled={downloading === 'excel'}>
               <FileSpreadsheet size={16} /> {downloading === 'excel' ? 'Preparing...' : 'Excel'}
             </Button>
+            {canDelete && (
+              <Button
+                variant="danger"
+                onClick={() => setShowDeleteModal(true)}
+                title="Permanently Delete this Result"
+              >
+                <Trash2 size={16} /> Delete Permanently
+              </Button>
+            )}
           </div>
         </div>
       </Card>
@@ -243,6 +274,18 @@ export default function ResultDetailsPage() {
           </div>
         )}
       </Modal>
+
+      <PermanentDeleteModal
+        open={showDeleteModal}
+        onClose={() => setShowDeleteModal(false)}
+        onConfirm={handlePermanentDelete}
+        title="Permanently Delete Finalized Result?"
+        examName={result.examName || result.examType}
+        targetName={`Class ${result.class}${result.section ? ` - ${result.section}` : ''}`}
+        targetLabel="Class"
+        isEntireExam={false}
+        busy={deleteBusy}
+      />
     </div>
   );
 }

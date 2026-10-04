@@ -44,6 +44,11 @@ router.get(
   requirePermission('VIEW_RESULTS'),
   teacherController.getTeacherSubjectSubmission
 );
+router.get(
+  '/:id/result-sessions/:sessionId/subjects/:subjectId/classes/:classId/submission',
+  requirePermission('VIEW_RESULTS'),
+  teacherController.getTeacherSubjectSubmission
+);
 // The one mutation exception in this otherwise read-only admin
 // namespace -- spec explicitly grants Super Admin (and permitted
 // Assistant Admin) the ability to disable a link or reopen a submission,
@@ -55,6 +60,16 @@ router.patch(
 );
 router.delete(
   '/:id/result-sessions/:sessionId/subjects/:subjectId/submission',
+  requirePermission('MANAGE_RESULTS'),
+  teacherController.adminReopenSubjectSubmission
+);
+router.post(
+  '/:id/result-sessions/:sessionId/subjects/:subjectId/classes/:classId/reopen',
+  requirePermission('MANAGE_RESULTS'),
+  teacherController.adminReopenSubjectSubmission
+);
+router.delete(
+  '/:id/result-sessions/:sessionId/subjects/:subjectId/classes/:classId/submission',
   requirePermission('MANAGE_RESULTS'),
   teacherController.adminReopenSubjectSubmission
 );

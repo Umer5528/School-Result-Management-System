@@ -1,4 +1,4 @@
-const { Result, Draft } = require('../models');
+const { Result, Draft, ResultSession } = require('../models');
 const AppError = require('../utils/appError');
 const { ok } = require('../utils/apiResponse');
 const { calculateResult, recomputePassFailStatistics } = require('../services/resultCalculationService');
@@ -158,21 +158,53 @@ async function deleteResult(req, res) {
   const existing = await getResultOr404(req);
   const user = req.user;
   const isOwner = existing.createdBy.toString() === user._id.toString();
-  const canManage = user.role === 'super_admin';
+  const canManage =
+    user.role === 'super_admin' ||
+    (user.role === 'assistant_admin' && (user.permissions || []).includes('MANAGE_RESULTS'));
   if (!isOwner && !canManage) {
     throw new AppError('You do not have permission to delete this result', 403);
   }
 
-  await existing.deleteOne();
-
+  // Pre-deletion audit log
   await logActivity({
     userId: req.user._id,
-    action: 'RESULT_DELETED',
+    action: 'PERMANENT_RESULT_DELETION',
     targetType: 'Result',
     targetId: existing._id,
+    metadata: {
+      examName: existing.examName || existing.examType,
+      class: existing.class,
+      section: existing.section || '',
+      studentCount: existing.students.length,
+      affectedSubjectCount: existing.subjects.length,
+      scope: 'FINAL_RESULT',
+    },
   });
 
-  return ok(res, null, 'Result deleted');
+  // Unlink from ResultSession if generated from a session
+  if (existing.sourceSessionId) {
+    const session = await ResultSession.findById(existing.sourceSessionId);
+    if (session) {
+      if (session.finalResultId && session.finalResultId.toString() === existing._id.toString()) {
+        session.finalResultId = null;
+      }
+      if (session.classes) {
+        const classEntry = session.classes.find(
+          (c) =>
+            (c.finalResultId && c.finalResultId.toString() === existing._id.toString()) ||
+            (existing.sourceSessionClassId && c._id.toString() === existing.sourceSessionClassId.toString())
+        );
+        if (classEntry) {
+          classEntry.finalResultId = null;
+        }
+      }
+      await session.save();
+    }
+  }
+
+  await existing.deleteOne();
+
+  return ok(res, null, 'Result permanently deleted');
 }
 
 async function downloadPdf(req, res) {

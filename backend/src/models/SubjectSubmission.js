@@ -22,6 +22,23 @@ const submissionMarkSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const classSubmissionSchema = new mongoose.Schema(
+  {
+    classId: { type: mongoose.Schema.Types.ObjectId, required: true },
+    className: { type: String, required: true, trim: true },
+    section: { type: String, trim: true, default: '' },
+    status: {
+      type: String,
+      enum: ['PENDING', 'SUBMITTED', 'LOCKED'],
+      default: 'PENDING',
+    },
+    marks: { type: [submissionMarkSchema], default: [] },
+    submittedVia: { type: String, enum: ['public', 'teacher'], default: null },
+    submittedAt: { type: Date, default: null },
+  },
+  { _id: true }
+);
+
 const subjectSubmissionSchema = new mongoose.Schema(
   {
     resultSession: { type: mongoose.Schema.Types.ObjectId, ref: 'ResultSession', required: true, index: true },
@@ -35,12 +52,15 @@ const subjectSubmissionSchema = new mongoose.Schema(
     passingMarks: { type: Number, required: true, min: 0 },
     allowSubmitterConfig: { type: Boolean, default: false },
 
-    // Empty until actually submitted.
+    // Multi-class tracking: one entry per class in the exam session
+    classSubmissions: { type: [classSubmissionSchema], default: [] },
+
+    // Retained for backward compatibility with single-class legacy sessions
     marks: { type: [submissionMarkSchema], default: [] },
 
     status: {
       type: String,
-      enum: ['PENDING', 'SUBMITTED', 'LOCKED', 'DISABLED'],
+      enum: ['PENDING', 'IN_PROGRESS', 'SUBMITTED', 'LOCKED', 'DISABLED'],
       default: 'PENDING',
       index: true,
     },

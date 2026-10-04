@@ -5,5 +5,8 @@ import api from './axios';
 // separate "verify then browse subjects" step anymore.
 export const publicApi = {
   getSubmissionInfo: (token) => api.get(`/public/submissions/${token}`).then((r) => r.data),
+  getClassRoster: (token, classId) => api.get(`/public/submissions/${token}/classes/${classId}`).then((r) => r.data),
+  submitClassMarks: (token, classId, payload) =>
+    api.post(`/public/submissions/${token}/classes/${classId}`, payload).then((r) => r.data),
   submit: (token, payload) => api.post(`/public/submissions/${token}/submit`, payload).then((r) => r.data),
 };

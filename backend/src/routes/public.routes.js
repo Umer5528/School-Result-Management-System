@@ -24,6 +24,8 @@ const submitLimiter = rateLimit({
 });
 
 router.get('/submissions/:token', verifyLimiter, controller.getSubmissionInfo);
+router.get('/submissions/:token/classes/:classId', verifyLimiter, controller.getClassRoster);
+router.post('/submissions/:token/classes/:classId', submitLimiter, validate(submitSubjectSchema), controller.submitClassMarks);
 router.post('/submissions/:token/submit', submitLimiter, validate(submitSubjectSchema), controller.submitMarks);
 
 module.exports = router;

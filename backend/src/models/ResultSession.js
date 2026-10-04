@@ -28,11 +28,24 @@ const sessionSubjectSchema = new mongoose.Schema(
   { _id: true }
 );
 
+const sessionClassSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true, trim: true },
+    section: { type: String, trim: true, default: '' },
+    finalResultId: { type: mongoose.Schema.Types.ObjectId, ref: 'Result', default: null },
+  },
+  { _id: true }
+);
+
 const sessionStudentSchema = new mongoose.Schema(
   {
     rollNumber: { type: String, required: true, trim: true },
     name: { type: String, required: true, trim: true },
     fatherName: { type: String, trim: true },
+    class: { type: String, trim: true },
+    section: { type: String, trim: true, default: '' },
+    classId: { type: mongoose.Schema.Types.ObjectId },
+    studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' },
   },
   { _id: false }
 );
@@ -46,8 +59,11 @@ const resultSessionSchema = new mongoose.Schema(
     examType: { type: String, required: true, trim: true },
     resultDate: { type: Date, required: true },
     academicYear: { type: String, required: true, trim: true },
-    class: { type: String, required: true, trim: true },
+    // Retained for backward compatibility; in multi-class exams this represents a summary/primary class
+    class: { type: String, trim: true },
     section: { type: String, trim: true },
+    // Multi-class support: an exam can include multiple classes
+    classes: { type: [sessionClassSchema], default: [] },
 
     schoolInfo: {
       name: { type: String, trim: true },

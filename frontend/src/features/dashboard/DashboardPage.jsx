@@ -1,23 +1,32 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FilePlus2, FileText, Users } from 'lucide-react';
+import { FilePlus2, FileText, Users, TrendingUp } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { resultsApi } from '../../api/resultsApi';
 import { teachersApi } from '../../api/teachersApi';
 import Card from '../../components/ui/Card';
 import Skeleton from '../../components/ui/Skeleton';
-import StatusBadge from '../../components/ui/StatusBadge';
 import Button from '../../components/ui/Button';
 
-function StatCard({ label, value, icon: Icon }) {
+const GRADIENTS = {
+  brand: 'from-brand-500 to-indigo-500',
+  emerald: 'from-emerald-400 to-teal-500',
+  amber: 'from-amber-400 to-orange-500',
+};
+
+function StatCard({ label, value, icon: Icon, color = 'brand', delay = 0 }) {
   return (
-    <Card className="flex items-center gap-4">
-      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+    <Card
+      hoverable
+      className="flex items-center gap-4 animate-fadeInUp"
+      style={{ animationDelay: `${delay}ms` }}
+    >
+      <div className={`flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br ${GRADIENTS[color]} text-white shadow-glow`}>
         <Icon size={20} />
       </div>
       <div>
         <p className="text-xs text-slate-500">{label}</p>
-        <p className="text-xl font-semibold text-slate-800">{value}</p>
+        <p className="text-2xl font-semibold text-slate-800">{value}</p>
       </div>
     </Card>
   );
@@ -49,12 +58,16 @@ export default function DashboardPage() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const avgPassRate = recentResults.length
+    ? Math.round(recentResults.reduce((sum, r) => sum + (r.statistics?.passPercentage || 0), 0) / recentResults.length)
+    : null;
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3 animate-fadeInUp">
         <div>
-          <h1 className="text-xl font-semibold text-slate-800">
-            Welcome back, {user.name.split(' ')[0]}
+          <h1 className="text-xl font-semibold text-slate-800 sm:text-2xl">
+            Welcome back, <span className="bg-brand-gradient bg-clip-text text-transparent">{user.name.split(' ')[0]}</span>
           </h1>
           <p className="text-sm text-slate-500 capitalize">{user.role.replace('_', ' ')} dashboard</p>
         </div>
@@ -68,13 +81,16 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <StatCard label="Recent Results" value={loading ? '—' : recentResults.length} icon={FileText} />
+        <StatCard label="Recent Results" value={loading ? '—' : recentResults.length} icon={FileText} color="brand" delay={0} />
+        {avgPassRate !== null && (
+          <StatCard label="Avg Pass Rate" value={`${avgPassRate}%`} icon={TrendingUp} color="emerald" delay={60} />
+        )}
         {pendingCount !== null && (
-          <StatCard label="Pending Teacher Registrations" value={pendingCount} icon={Users} />
+          <StatCard label="Pending Teacher Registrations" value={pendingCount} icon={Users} color="amber" delay={120} />
         )}
       </div>
 
-      <Card>
+      <Card className="animate-fadeInUp" style={{ animationDelay: '160ms' }}>
         <h2 className="mb-4 text-sm font-semibold text-slate-700">Recent Results</h2>
         {loading ? (
           <div className="space-y-2">
@@ -98,14 +114,14 @@ export default function DashboardPage() {
               </thead>
               <tbody>
                 {recentResults.map((r) => (
-                  <tr key={r._id} className="border-b border-slate-100">
+                  <tr key={r._id} className="border-b border-slate-100 transition-colors hover:bg-slate-50">
                     <td className="py-2 pr-4">{r.class}{r.section ? ` - ${r.section}` : ''}</td>
                     <td className="py-2 pr-4">{r.examName || r.examType}</td>
                     <td className="py-2 pr-4">{r.academicYear}</td>
                     <td className="py-2 pr-4">{r.statistics?.totalStudents}</td>
                     <td className="py-2 pr-4">{r.statistics?.passPercentage}%</td>
                     <td className="py-2 text-right">
-                      <Link to={`/results/${r._id}`} className="text-brand-600 font-medium">
+                      <Link to={`/results/${r._id}`} className="font-medium text-brand-600 transition-colors hover:text-brand-800">
                         View
                       </Link>
                     </td>

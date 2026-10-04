@@ -90,6 +90,7 @@ const resultSchema = new mongoose.Schema(
     // the original direct "Create Result" wizard, which still works
     // exactly as before.
     sourceSessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'ResultSession', default: null },
+    sourceSessionClassId: { type: mongoose.Schema.Types.ObjectId, default: null },
 
     schoolInfo: { type: schoolInfoSchema, default: () => ({}) },
 

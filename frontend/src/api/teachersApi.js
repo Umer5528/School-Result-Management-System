@@ -9,12 +9,20 @@ export const teachersApi = {
   getResultSessions: (id, params) => api.get(`/teachers/${id}/result-sessions`, { params }).then((r) => r.data),
   getResultSession: (id, sessionId) =>
     api.get(`/teachers/${id}/result-sessions/${sessionId}`).then((r) => r.data),
-  getSubjectSubmission: (id, sessionId, subjectId) =>
-    api.get(`/teachers/${id}/result-sessions/${sessionId}/subjects/${subjectId}/submission`).then((r) => r.data),
+  getSubjectSubmission: (id, sessionId, subjectId, classId = null) => {
+    const url = classId
+      ? `/teachers/${id}/result-sessions/${sessionId}/subjects/${subjectId}/classes/${classId}/submission`
+      : `/teachers/${id}/result-sessions/${sessionId}/subjects/${subjectId}/submission`;
+    return api.get(url).then((r) => r.data);
+  },
   disableSubjectLink: (id, sessionId, subjectId) =>
     api.patch(`/teachers/${id}/result-sessions/${sessionId}/subjects/${subjectId}/disable`).then((r) => r.data),
-  reopenSubjectSubmission: (id, sessionId, subjectId) =>
-    api.delete(`/teachers/${id}/result-sessions/${sessionId}/subjects/${subjectId}/submission`).then((r) => r.data),
+  reopenSubjectSubmission: (id, sessionId, subjectId, classId = null) => {
+    const url = classId
+      ? `/teachers/${id}/result-sessions/${sessionId}/subjects/${subjectId}/classes/${classId}/reopen`
+      : `/teachers/${id}/result-sessions/${sessionId}/subjects/${subjectId}/submission`;
+    return (classId ? api.post(url) : api.delete(url)).then((r) => r.data);
+  },
   create: (payload) => api.post('/teachers', payload).then((r) => r.data),
   update: (id, payload) => api.put(`/teachers/${id}`, payload).then((r) => r.data),
   approve: (id) => api.patch(`/teachers/${id}/approve`).then((r) => r.data),

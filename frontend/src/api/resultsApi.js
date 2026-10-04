@@ -27,6 +27,7 @@ export const resultsApi = {
   create: (payload) => api.post('/results', payload).then((r) => r.data),
   update: (id, payload) => api.put(`/results/${id}`, payload).then((r) => r.data),
   remove: (id) => api.delete(`/results/${id}`).then((r) => r.data),
+  permanentDelete: (id) => api.delete(`/results/${id}/permanent`).then((r) => r.data),
   overrideStudentStatus: (id, rollNumber, payload) =>
     api.patch(`/results/${id}/students/${encodeURIComponent(rollNumber)}/override`, payload).then((r) => r.data),
   downloadPdf: (id) => downloadBlob(`/results/${id}/pdf`, `result-${id}.pdf`),

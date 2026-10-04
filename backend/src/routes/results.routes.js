@@ -13,6 +13,7 @@ router.post('/', validate(createResultSchema), resultController.createResult);
 router.get('/', resultController.listResults);
 router.get('/:id', resultController.getResult);
 router.put('/:id', validate(updateResultSchema), resultController.updateResult);
+router.delete('/:id/permanent', resultController.deleteResult);
 router.delete('/:id', resultController.deleteResult);
 router.patch(
   '/:id/students/:rollNumber/override',

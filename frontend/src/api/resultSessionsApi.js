@@ -10,20 +10,42 @@ export const resultSessionsApi = {
 
   // Per-subject link management -- every subject now has its own link,
   // status, and lifecycle, managed independently.
-  getSubjectSubmission: (id, subjectId) =>
-    api.get(`/result-sessions/${id}/subjects/${subjectId}/submission`).then((r) => r.data),
-  editSubjectSubmission: (id, subjectId, payload) =>
-    api.put(`/result-sessions/${id}/subjects/${subjectId}/submission`, payload).then((r) => r.data),
-  reopenSubject: (id, subjectId) =>
-    api.delete(`/result-sessions/${id}/subjects/${subjectId}/submission`).then((r) => r.data),
-  lockSubject: (id, subjectId) =>
-    api.patch(`/result-sessions/${id}/subjects/${subjectId}/lock`).then((r) => r.data),
-  unlockSubject: (id, subjectId) =>
-    api.patch(`/result-sessions/${id}/subjects/${subjectId}/unlock`).then((r) => r.data),
+  getSubjectSubmission: (id, subjectId, classId = null) => {
+    const url = classId
+      ? `/result-sessions/${id}/subjects/${subjectId}/classes/${classId}/submission`
+      : `/result-sessions/${id}/subjects/${subjectId}/submission`;
+    return api.get(url).then((r) => r.data);
+  },
+  editSubjectSubmission: (id, subjectId, payload, classId = null) => {
+    const url = classId
+      ? `/result-sessions/${id}/subjects/${subjectId}/classes/${classId}/submission`
+      : `/result-sessions/${id}/subjects/${subjectId}/submission`;
+    return api.put(url, payload).then((r) => r.data);
+  },
+  reopenSubject: (id, subjectId, classId = null) => {
+    const url = classId
+      ? `/result-sessions/${id}/subjects/${subjectId}/classes/${classId}/reopen`
+      : `/result-sessions/${id}/subjects/${subjectId}/submission`;
+    return (classId ? api.post(url) : api.delete(url)).then((r) => r.data);
+  },
+  lockSubject: (id, subjectId, classId = null) =>
+    api.patch(`/result-sessions/${id}/subjects/${subjectId}/lock`, null, { params: { classId } }).then((r) => r.data),
+  unlockSubject: (id, subjectId, classId = null) =>
+    api.patch(`/result-sessions/${id}/subjects/${subjectId}/unlock`, null, { params: { classId } }).then((r) => r.data),
   disableSubjectLink: (id, subjectId) =>
     api.patch(`/result-sessions/${id}/subjects/${subjectId}/disable`).then((r) => r.data),
   enableSubjectLink: (id, subjectId) =>
     api.patch(`/result-sessions/${id}/subjects/${subjectId}/enable`).then((r) => r.data),
   regenerateSubjectToken: (id, subjectId) =>
     api.post(`/result-sessions/${id}/subjects/${subjectId}/regenerate-token`).then((r) => r.data),
+
+  // Per-class finalization
+  generateClassFinal: (id, classId) =>
+    api.post(`/result-sessions/${id}/classes/${classId}/generate-final`).then((r) => r.data),
+
+  // Permanent deletion
+  deleteClassResultPermanently: (id, classId) =>
+    api.delete(`/result-sessions/${id}/classes/${classId}/permanent`).then((r) => r.data),
+  deleteEntireExamPermanently: (id) =>
+    api.delete(`/result-sessions/${id}/permanent`).then((r) => r.data),
 };

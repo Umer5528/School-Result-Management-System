@@ -157,10 +157,8 @@ async function findAdminSubjectLink(req) {
 
 async function getTeacherSubjectSubmission(req, res) {
   const { session, subject, link } = await findAdminSubjectLink(req);
-  if (!['SUBMITTED', 'LOCKED'].includes(link.status)) {
-    throw new AppError(`${subject.name} has not been submitted yet`, 404);
-  }
-  return ok(res, { submission: buildSubmissionView(session, link) });
+  const classId = req.params.classId || req.query.classId || null;
+  return ok(res, { submission: buildSubmissionView(session, link, classId) });
 }
 
 // ---------- Admin mutation: disable/reopen a subject link (spec:
@@ -171,9 +169,6 @@ async function getTeacherSubjectSubmission(req, res) {
 
 async function adminDisableSubjectLink(req, res) {
   const { session, subject, link } = await findAdminSubjectLink(req);
-  if (link.status !== 'PENDING') {
-    throw new AppError('Only a pending (not yet submitted) subject link can be disabled', 400);
-  }
   link.status = 'DISABLED';
   await link.save();
 
@@ -190,9 +185,53 @@ async function adminDisableSubjectLink(req, res) {
 
 async function adminReopenSubjectSubmission(req, res) {
   const { session, subject, link } = await findAdminSubjectLink(req);
-  if (link.status === 'LOCKED') throw new AppError('Unlock this subject before reopening it', 400);
-  if (link.status !== 'SUBMITTED') throw new AppError('This subject has not been submitted yet', 400);
+  const classId = req.params.classId || req.query.classId || req.body?.classId;
+  const { normalizeClasses } = require('../services/resultSessionViewService');
+  const normClasses = normalizeClasses(session);
+  const targetClass = classId
+    ? normClasses.find((c) => c._id.toString() === classId.toString() || c.name === classId)
+    : normClasses[0];
 
+  const classSub = link.classSubmissions?.find(
+    (cs) => (cs.classId && cs.classId.toString() === targetClass?._id.toString()) || cs.className === targetClass?.name
+  );
+
+  if (classSub) {
+    if (classSub.status === 'LOCKED') throw new AppError('Unlock this subject before reopening it', 400);
+    const clearedMarks = [...classSub.marks];
+    const clearedAt = classSub.submittedAt;
+
+    await logActivity({
+      userId: req.user._id,
+      action: 'SUBJECT_REOPENED_BY_ADMIN',
+      targetType: 'ResultSession',
+      targetId: session._id,
+      metadata: {
+        subjectId: subject._id,
+        subjectName: subject.name,
+        teacherId: session.createdBy,
+        classId: targetClass._id,
+        className: targetClass.name,
+        clearedMarksCount: clearedMarks.length,
+        clearedAt,
+      },
+    });
+
+    classSub.marks = [];
+    classSub.status = 'PENDING';
+    classSub.submittedAt = null;
+    classSub.submittedVia = null;
+
+    const submittedClasses = link.classSubmissions.filter(
+      (cs) => cs.status === 'SUBMITTED' || cs.status === 'LOCKED'
+    );
+    link.status = submittedClasses.length > 0 ? 'IN_PROGRESS' : 'PENDING';
+    await link.save();
+    return ok(res, { link }, `${targetClass.name} ${subject.name} reopened`);
+  }
+
+  // Fallback for legacy doc
+  if (link.status === 'LOCKED') throw new AppError('Unlock this subject before reopening it', 400);
   await logActivity({
     userId: req.user._id,
     action: 'SUBJECT_REOPENED_BY_ADMIN',

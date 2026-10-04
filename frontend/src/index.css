@@ -1,3 +1,38 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Slim, unobtrusive scrollbar for the internal scroll areas (modals,
+   marks tables) that already exist throughout the app -- purely visual. */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.35);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Utility for staggering the entrance animation across a list of cards
+   without needing any JS -- add style={{ animationDelay: \`${i * 40}ms\` }}
+   alongside animate-fadeInUp. */
+.animate-fadeInUp {
+  animation-fill-mode: both;
+}
+
+/* Shimmer sweep used by the skeleton loaders, replacing the flat pulse. */
+.skeleton-shimmer {
+  background: linear-gradient(90deg, #e2e8f0 0%, #f1f5f9 50%, #e2e8f0 100%);
+  background-size: 800px 100%;
+}
