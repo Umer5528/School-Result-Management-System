@@ -1,16 +1,30 @@
-const mongoose = require('mongoose');
-const env = require('./env');
+const mongoose = require("mongoose");
+
+const env = require("./env");
+
+let cachedConnection = null;
 
 async function connectDB() {
-  mongoose.set('strictQuery', true);
+  mongoose.set("strictQuery", true);
+
+  if (cachedConnection) {
+    return cachedConnection;
+  }
+
+  if (mongoose.connection.readyState === 1) {
+    cachedConnection = mongoose.connection;
+    return cachedConnection;
+  }
+
   try {
-    await mongoose.connect(env.mongoUri);
-    // eslint-disable-next-line no-console
-    console.log('[db] MongoDB connected');
+    cachedConnection = await mongoose.connect(env.mongoUri);
+
+    console.log("[db] MongoDB connected");
+
+    return cachedConnection;
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('[db] MongoDB connection failed:', err.message);
-    process.exit(1);
+    console.error("[db] MongoDB connection failed:", err.message);
+    throw err;
   }
 }
 
