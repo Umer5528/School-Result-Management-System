@@ -17,6 +17,7 @@ const mongoose = require('mongoose');
 const submissionMarkSchema = new mongoose.Schema(
   {
     rollNumber: { type: String, required: true, trim: true },
+    studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' },
     obtained: { type: Number, required: true, min: 0 },
   },
   { _id: false }
@@ -26,7 +27,12 @@ const classSubmissionSchema = new mongoose.Schema(
   {
     classId: { type: mongoose.Schema.Types.ObjectId, required: true },
     className: { type: String, required: true, trim: true },
+    group: { type: String, trim: true, default: '' },
     section: { type: String, trim: true, default: '' },
+    displayName: { type: String, trim: true },
+    subjectConfigId: { type: mongoose.Schema.Types.ObjectId },
+    totalMarks: { type: Number },
+    passingMarks: { type: Number },
     status: {
       type: String,
       enum: ['PENDING', 'SUBMITTED', 'LOCKED'],
@@ -70,6 +76,7 @@ const subjectSubmissionSchema = new mongoose.Schema(
     // system, not just within a session, since it's the sole public
     // lookup key.
     submissionToken: { type: String, required: true, unique: true, index: true },
+    tokenHash: { type: String, index: true, sparse: true },
 
     submittedVia: { type: String, enum: ['public', 'teacher'], default: null },
     submittedAt: { type: Date, default: null },

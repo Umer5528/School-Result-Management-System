@@ -11,6 +11,7 @@ const classProfileSchema = new mongoose.Schema(
   {
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     class: { type: String, required: true, trim: true },
+    group: { type: String, trim: true, default: '' },
     section: { type: String, trim: true, default: '' },
 
     schoolInfo: {
@@ -38,7 +39,7 @@ const classProfileSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// One remembered profile per teacher per class/section.
-classProfileSchema.index({ createdBy: 1, class: 1, section: 1 }, { unique: true });
+// One remembered profile per teacher per class/group/section.
+classProfileSchema.index({ createdBy: 1, class: 1, group: 1, section: 1 }, { unique: true });
 
 module.exports = mongoose.model('ClassProfile', classProfileSchema);

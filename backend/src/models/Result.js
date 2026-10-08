@@ -95,6 +95,7 @@ const resultSchema = new mongoose.Schema(
     schoolInfo: { type: schoolInfoSchema, default: () => ({}) },
 
     class: { type: String, required: true, trim: true, index: true },
+    group: { type: String, trim: true, default: '' },
     section: { type: String, trim: true },
     academicYear: { type: String, required: true, trim: true, index: true },
     examType: { type: String, required: true, trim: true, index: true },

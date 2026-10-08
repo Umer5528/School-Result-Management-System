@@ -6,6 +6,7 @@ const { ok } = require('../utils/apiResponse');
 const { toPublicUser, SALT_ROUNDS } = require('./authController');
 const { logActivity } = require('../services/activityLogService');
 const { paginationParams, paginatedResponse } = require('../utils/pagination');
+const { generateSubmissionToken, hashToken } = require('../utils/submissionToken');
 const { attachSubmissionStatus, attachSubmissionCounts, buildSubmissionView } = require('../services/resultSessionViewService');
 
 // ---------- Super Admin: direct teacher creation (no approval needed) ----------
@@ -181,6 +182,56 @@ async function adminDisableSubjectLink(req, res) {
   });
 
   return ok(res, { link }, `${subject.name} link disabled`);
+}
+
+async function adminEnableSubjectLink(req, res) {
+  const { session, subject, link } = await findAdminSubjectLink(req);
+  if (link.status !== 'DISABLED') {
+    throw new AppError('Only a disabled subject link can be re-enabled', 400);
+  }
+  const submittedClasses = (link.classSubmissions || []).filter(
+    (cs) => cs.status === 'SUBMITTED' || cs.status === 'LOCKED'
+  );
+  link.status =
+    submittedClasses.length >= (session.classes?.length || 1)
+      ? 'SUBMITTED'
+      : submittedClasses.length > 0
+      ? 'IN_PROGRESS'
+      : 'PENDING';
+  await link.save();
+
+  await logActivity({
+    userId: req.user._id,
+    action: 'SUBJECT_LINK_ENABLED_BY_ADMIN',
+    targetType: 'ResultSession',
+    targetId: session._id,
+    metadata: { subjectId: subject._id, subjectName: subject.name, teacherId: session.createdBy },
+  });
+
+  return ok(res, { link }, `${subject.name} link re-enabled`);
+}
+
+async function adminRegenerateSubjectToken(req, res) {
+  const { session, subject, link } = await findAdminSubjectLink(req);
+  let candidate = generateSubmissionToken();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const clash = await SubjectSubmission.findOne({ submissionToken: candidate }).select('_id').lean();
+    if (!clash) break;
+    candidate = generateSubmissionToken();
+  }
+  link.submissionToken = candidate;
+  link.tokenHash = hashToken(candidate);
+  await link.save();
+
+  await logActivity({
+    userId: req.user._id,
+    action: 'SUBJECT_LINK_TOKEN_REGENERATED_BY_ADMIN',
+    targetType: 'ResultSession',
+    targetId: session._id,
+    metadata: { subjectId: subject._id, subjectName: subject.name, teacherId: session.createdBy, regenerated: true },
+  });
+
+  return ok(res, { link }, `New link generated for ${subject.name}. Previous link no longer works.`);
 }
 
 async function adminReopenSubjectSubmission(req, res) {
@@ -441,6 +492,8 @@ module.exports = {
   getTeacherResultSessionDetail,
   getTeacherSubjectSubmission,
   adminDisableSubjectLink,
+  adminEnableSubjectLink,
+  adminRegenerateSubjectToken,
   adminReopenSubjectSubmission,
   updateTeacher,
   approveTeacher,

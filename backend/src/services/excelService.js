@@ -40,6 +40,7 @@ async function generateResultExcel(result) {
   sheet.mergeCells(`A2:${lastColLetter}2`);
   sheet.getCell('A2').value =
     `${result.examName || result.examType} — ${result.academicYear} — Class ${result.class}` +
+    (result.group ? ` [${result.group}]` : '') +
     (result.section ? ` (${result.section})` : '');
   sheet.getCell('A2').font = { bold: true, size: 12 };
   sheet.getCell('A2').alignment = { horizontal: 'center' };

@@ -16,4 +16,9 @@ function generateSubmissionToken() {
   return `RES-${code}`;
 }
 
-module.exports = { generateSubmissionToken };
+function hashToken(token) {
+  if (!token) return '';
+  return crypto.createHash('sha256').update(String(token).trim().toUpperCase()).digest('hex');
+}
+
+module.exports = { generateSubmissionToken, hashToken };

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft,
@@ -17,10 +17,12 @@ import { useDebounce } from '../../hooks/useDebounce';
 import { loadDraft, saveDraft, clearDraft, draftHasContent } from '../../utils/submissionDraft';
 
 export default function SubmitResultPage() {
+  const { token: routeToken } = useParams();
   const [searchParams] = useSearchParams();
+  const initialCode = (routeToken || searchParams.get('code') || '').toUpperCase();
   // stages: 'code' | 'classes' | 'marks' | 'review' | 'success' | 'already_submitted'
   const [stage, setStage] = useState('code');
-  const [code, setCode] = useState(searchParams.get('code') || '');
+  const [code, setCode] = useState(initialCode);
   const [verifying, setVerifying] = useState(false);
 
   // Link metadata
@@ -50,9 +52,9 @@ export default function SubmitResultPage() {
   const draftKey = `${code}_${selectedClass?._id || 'default'}`;
 
   useEffect(() => {
-    const queryCode = searchParams.get('code');
-    if (queryCode) handleVerify(queryCode);
-  }, []); // eslint-disable-line
+    const codeToVerify = routeToken || searchParams.get('code');
+    if (codeToVerify) handleVerify(codeToVerify);
+  }, [routeToken]); // eslint-disable-line
 
   async function handleVerify(providedCode) {
     const value = (providedCode || code).trim().toUpperCase();
@@ -89,14 +91,15 @@ export default function SubmitResultPage() {
   }
 
   async function handleSelectClass(cls) {
-    setSelectedClass(cls);
+    const classId = cls.classId || cls._id;
+    setSelectedClass({ ...cls, _id: classId });
     setLoadingClass(true);
     try {
-      const { data } = await publicApi.getClassRoster(code, cls._id);
+      const { data } = await publicApi.getClassRoster(code, classId);
 
       if (data.alreadySubmitted) {
         setClassAlreadySubmittedInfo({
-          className: cls.name,
+          className: cls.displayName || cls.name,
           submittedAt: data.submittedAt,
         });
         setStage('already_submitted');
@@ -186,7 +189,7 @@ export default function SubmitResultPage() {
       clearDraft(draftKey);
 
       setSuccessInfo({
-        className: data.className || selectedClass.name,
+        className: data.className || selectedClass.displayName || selectedClass.name,
         remainingClassesCount: data.remainingClassesCount,
         nextClass: data.nextClass,
         isAllClassesSubmitted: data.isAllClassesSubmitted,
@@ -195,7 +198,7 @@ export default function SubmitResultPage() {
       // Update local classes status
       setClasses((prev) =>
         prev.map((c) =>
-          c._id === selectedClass._id
+          (c._id === selectedClass._id || c.classId === selectedClass._id)
             ? { ...c, status: 'SUBMITTED', submittedAt: new Date().toISOString() }
             : c
         )
@@ -227,6 +230,7 @@ export default function SubmitResultPage() {
             <p className="text-xs text-slate-500 mt-0.5">
               {sessionInfo.schoolInfo?.name || 'School Examination'} •{' '}
               {sessionInfo.examName || sessionInfo.examType}
+              {sessionInfo.academicYear ? ` | ${sessionInfo.academicYear}` : ''}
             </p>
           )}
         </div>
@@ -262,7 +266,7 @@ export default function SubmitResultPage() {
                   <span className="text-xs font-semibold uppercase tracking-wider text-brand-600">
                     {subject.name}
                   </span>
-                  <h2 className="text-base font-bold text-slate-800">Select Class to Enter Marks</h2>
+                  <h2 className="text-base font-bold text-slate-800">Select Class/Group to Enter Marks</h2>
                 </div>
                 <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600">
                   {classes.filter((c) => c.status === 'SUBMITTED' || c.status === 'LOCKED').length} /{' '}
@@ -270,8 +274,8 @@ export default function SubmitResultPage() {
                 </span>
               </div>
               <p className="text-xs text-slate-500 mt-1">
-                This secure link handles {subject.name} marks for all classes participating in this exam.
-                Select a class to proceed:
+                This secure link handles {subject.name} marks for authorized classes/groups participating in this exam.
+                Select a class/group to proceed:
               </p>
             </div>
 
@@ -287,9 +291,10 @@ export default function SubmitResultPage() {
             <div className="space-y-2.5">
               {classes.map((cls) => {
                 const isSubmitted = cls.status === 'SUBMITTED' || cls.status === 'LOCKED';
+                const classLabel = cls.displayName || (cls.group ? `${cls.name} ${cls.group}` : cls.name);
                 return (
                   <button
-                    key={cls._id}
+                    key={cls._id || cls.classId}
                     type="button"
                     disabled={loadingClass}
                     onClick={() => handleSelectClass(cls)}
@@ -301,8 +306,8 @@ export default function SubmitResultPage() {
                   >
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="text-base font-bold text-slate-800">{cls.name}</span>
-                        {cls.section && (
+                        <span className="text-base font-bold text-slate-800">{classLabel}</span>
+                        {cls.section && !classLabel.includes(cls.section) && (
                           <span className="text-xs font-semibold text-slate-500">
                             (Sec {cls.section})
                           </span>
@@ -395,21 +400,21 @@ export default function SubmitResultPage() {
                   <ArrowLeft size={13} /> Back to Class List
                 </button>
                 <h2 className="text-base font-bold text-slate-800">
-                  {selectedClass.name} — {subject.name} Marks
+                  {selectedClass.displayName || (selectedClass.group ? `${selectedClass.name} ${selectedClass.group}` : selectedClass.name)} — {subject.name} Marks
                 </h2>
                 <p className="text-xs text-slate-500">
                   {students.length} students • Total Marks: {totalMarks} • Pass: {passingMarks}
                 </p>
               </div>
               <span className="rounded-md bg-brand-50 px-2 py-1 text-xs font-bold text-brand-700 border border-brand-200">
-                {selectedClass.name}
+                {selectedClass.displayName || (selectedClass.group ? `${selectedClass.name} ${selectedClass.group}` : selectedClass.name)}
               </span>
             </div>
 
             {/* Unsaved draft prompt */}
             {pendingDraft && (
               <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                <span>You have unsaved marks from earlier for {selectedClass.name}.</span>
+                <span>You have unsaved marks from earlier for {selectedClass.displayName || selectedClass.name}.</span>
                 <div className="flex gap-2">
                   <button onClick={discardDraft} className="font-semibold underline">
                     Discard
@@ -480,7 +485,7 @@ export default function SubmitResultPage() {
             </div>
 
             <Button className="w-full" onClick={goToReview}>
-              Continue to Review {selectedClass.name} Marks
+              Continue to Review {selectedClass.displayName || selectedClass.name} Marks
             </Button>
           </Card>
         )}
@@ -490,7 +495,7 @@ export default function SubmitResultPage() {
           <Card className="space-y-4">
             <div>
               <h2 className="text-base font-bold text-slate-800">
-                Review {selectedClass.name} {subject.name} Marks
+                Review {selectedClass.displayName || selectedClass.name} {subject.name} Marks
               </h2>
               <p className="text-xs text-slate-500">
                 Please verify all marks before submitting. Once submitted, this class will be locked.
@@ -532,7 +537,7 @@ export default function SubmitResultPage() {
                 Back to Edit
               </Button>
               <Button className="flex-1" onClick={handleSubmitMarks} disabled={submitting}>
-                {submitting ? 'Submitting...' : `Submit ${selectedClass.name} Results`}
+                {submitting ? 'Submitting...' : `Submit ${selectedClass.displayName || selectedClass.name} Results`}
               </Button>
             </div>
           </Card>
@@ -585,7 +590,7 @@ export default function SubmitResultPage() {
                     handleSelectClass(successInfo.nextClass);
                   }}
                 >
-                  Submit {successInfo.nextClass.name} Results Now
+                  Submit {successInfo.nextClass.displayName || successInfo.nextClass.name} Results Now
                 </Button>
               )}
               <Button

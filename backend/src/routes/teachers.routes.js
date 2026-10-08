@@ -58,6 +58,16 @@ router.patch(
   requirePermission('MANAGE_RESULTS'),
   teacherController.adminDisableSubjectLink
 );
+router.patch(
+  '/:id/result-sessions/:sessionId/subjects/:subjectId/enable',
+  requirePermission('MANAGE_RESULTS'),
+  teacherController.adminEnableSubjectLink
+);
+router.post(
+  '/:id/result-sessions/:sessionId/subjects/:subjectId/regenerate-token',
+  requirePermission('MANAGE_RESULTS'),
+  teacherController.adminRegenerateSubjectToken
+);
 router.delete(
   '/:id/result-sessions/:sessionId/subjects/:subjectId/submission',
   requirePermission('MANAGE_RESULTS'),

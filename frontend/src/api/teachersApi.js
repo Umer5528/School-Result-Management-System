@@ -17,6 +17,10 @@ export const teachersApi = {
   },
   disableSubjectLink: (id, sessionId, subjectId) =>
     api.patch(`/teachers/${id}/result-sessions/${sessionId}/subjects/${subjectId}/disable`).then((r) => r.data),
+  enableSubjectLink: (id, sessionId, subjectId) =>
+    api.patch(`/teachers/${id}/result-sessions/${sessionId}/subjects/${subjectId}/enable`).then((r) => r.data),
+  regenerateSubjectToken: (id, sessionId, subjectId) =>
+    api.post(`/teachers/${id}/result-sessions/${sessionId}/subjects/${subjectId}/regenerate-token`).then((r) => r.data),
   reopenSubjectSubmission: (id, sessionId, subjectId, classId = null) => {
     const url = classId
       ? `/teachers/${id}/result-sessions/${sessionId}/subjects/${subjectId}/classes/${classId}/reopen`

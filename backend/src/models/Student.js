@@ -14,6 +14,7 @@ const studentSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     fatherName: { type: String, trim: true },
     class: { type: String, required: true, trim: true, index: true },
+    group: { type: String, trim: true, default: '', index: true },
     section: { type: String, trim: true },
     academicYear: { type: String, required: true, trim: true, index: true },
     studentId: { type: String, trim: true }, // optional admission/student ID
@@ -23,11 +24,11 @@ const studentSchema = new mongoose.Schema(
 );
 
 // A teacher can't register the same roll number twice within one
-// class/section/academic year.
+// class/group/section/academic year.
 studentSchema.index(
-  { createdBy: 1, class: 1, section: 1, academicYear: 1, rollNumber: 1 },
+  { createdBy: 1, class: 1, group: 1, section: 1, academicYear: 1, rollNumber: 1 },
   { unique: true }
 );
-studentSchema.index({ createdBy: 1, class: 1, section: 1, academicYear: 1 });
+studentSchema.index({ createdBy: 1, class: 1, group: 1, section: 1, academicYear: 1 });
 
 module.exports = mongoose.model('Student', studentSchema);

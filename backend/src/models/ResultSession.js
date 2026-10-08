@@ -31,7 +31,10 @@ const sessionSubjectSchema = new mongoose.Schema(
 const sessionClassSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
+    group: { type: String, trim: true, default: '' },
     section: { type: String, trim: true, default: '' },
+    displayName: { type: String, trim: true },
+    subjects: { type: [sessionSubjectSchema], default: [] },
     finalResultId: { type: mongoose.Schema.Types.ObjectId, ref: 'Result', default: null },
   },
   { _id: true }
@@ -43,6 +46,7 @@ const sessionStudentSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     fatherName: { type: String, trim: true },
     class: { type: String, trim: true },
+    group: { type: String, trim: true, default: '' },
     section: { type: String, trim: true, default: '' },
     classId: { type: mongoose.Schema.Types.ObjectId },
     studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student' },
@@ -62,7 +66,7 @@ const resultSessionSchema = new mongoose.Schema(
     // Retained for backward compatibility; in multi-class exams this represents a summary/primary class
     class: { type: String, trim: true },
     section: { type: String, trim: true },
-    // Multi-class support: an exam can include multiple classes
+    // Multi-class support: an exam can include multiple classes/groups
     classes: { type: [sessionClassSchema], default: [] },
 
     schoolInfo: {
@@ -76,9 +80,11 @@ const resultSessionSchema = new mongoose.Schema(
       type: [sessionStudentSchema],
       validate: { validator: (a) => a.length > 0, message: 'At least one student must be selected' },
     },
+    // Top-level subjects retained for backward compatibility with single-class sessions
+    // or as an aggregated union list of all subjects in the exam
     subjects: {
       type: [sessionSubjectSchema],
-      validate: { validator: (a) => a.length > 0, message: 'At least one subject is required' },
+      default: [],
     },
 
     // A bulk convenience switch only now -- ACTIVE means subject-level

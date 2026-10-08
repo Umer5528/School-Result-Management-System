@@ -11,7 +11,10 @@ const classItemSchema = z.union([
   z.string().min(1),
   z.object({
     name: z.string().min(1),
+    group: z.string().optional(),
     section: z.string().optional(),
+    displayName: z.string().optional(),
+    subjects: z.array(subjectSchema).optional(),
   }),
 ]);
 
@@ -22,6 +25,7 @@ const createSessionSchema = z
     resultDate: z.coerce.date(),
     academicYear: z.string().min(1),
     class: z.string().optional(),
+    group: z.string().optional(),
     section: z.string().optional(),
     classes: z.array(classItemSchema).optional(),
     schoolInfo: z
@@ -33,11 +37,27 @@ const createSessionSchema = z
       })
       .optional(),
     studentIds: z.array(z.string()).min(1, 'Select at least one student'),
-    subjects: z.array(subjectSchema).min(1),
+    subjects: z.array(subjectSchema).optional(),
   })
   .refine((data) => data.class || (data.classes && data.classes.length > 0), {
     message: 'At least one class must be specified',
     path: ['classes'],
-  });
+  })
+  .refine(
+    (data) => {
+      if (Array.isArray(data.subjects) && data.subjects.length > 0) return true;
+      if (
+        Array.isArray(data.classes) &&
+        data.classes.some((c) => typeof c === 'object' && Array.isArray(c.subjects) && c.subjects.length > 0)
+      ) {
+        return true;
+      }
+      return false;
+    },
+    {
+      message: 'At least one subject is required',
+      path: ['subjects'],
+    }
+  );
 
-module.exports = { createSessionSchema };
+module.exports = { createSessionSchema, subjectSchema, classItemSchema };

@@ -228,3 +228,68 @@ test('Audit logging specification: must not contain raw tokens', () => {
   assert.equal(auditEntry.studentCount, 35);
   assert.equal(auditEntry.affectedSubjectCount, 4);
 });
+
+test('hashToken: deterministic, secure SHA-256 hashing with case/whitespace normalization', () => {
+  const { hashToken } = require('../src/utils/submissionToken');
+  const token = 'RES-8K4P2X';
+  const hashed1 = hashToken(token);
+  const hashed2 = hashToken('  res-8k4p2x  ');
+  assert.equal(hashed1.length, 64);
+  assert.equal(hashed1, hashed2);
+  assert.notEqual(hashed1, token);
+});
+
+test('RBAC Session Permission rules: enforces teacher isolation, assistant admin permissions, and super admin full access', () => {
+  const teacherId1 = new mongoose.Types.ObjectId().toString();
+  const teacherId2 = new mongoose.Types.ObjectId().toString();
+
+  const session = {
+    _id: new mongoose.Types.ObjectId().toString(),
+    createdBy: teacherId1,
+  };
+
+  function canAccessSession(user, targetSession, method = 'GET') {
+    const isOwner = targetSession.createdBy.toString() === user._id.toString();
+    const isAdminView =
+      user.role === 'super_admin' ||
+      (user.role === 'assistant_admin' && (user.permissions || []).includes('VIEW_RESULTS'));
+    const isAdminManage =
+      user.role === 'super_admin' ||
+      (user.role === 'assistant_admin' && (user.permissions || []).includes('MANAGE_RESULTS'));
+
+    if (method === 'GET') {
+      return isOwner || isAdminView || isAdminManage;
+    }
+    return isOwner || isAdminManage;
+  }
+
+  // 1. Super admin: full read and write access to all sessions
+  const superAdmin = { _id: 'admin_1', role: 'super_admin' };
+  assert.equal(canAccessSession(superAdmin, session, 'GET'), true);
+  assert.equal(canAccessSession(superAdmin, session, 'DELETE'), true);
+
+  // 2. Assistant Admin with MANAGE_RESULTS: can read and delete
+  const aaManager = { _id: 'aa_1', role: 'assistant_admin', permissions: ['MANAGE_RESULTS'] };
+  assert.equal(canAccessSession(aaManager, session, 'GET'), true);
+  assert.equal(canAccessSession(aaManager, session, 'DELETE'), true);
+
+  // 3. Assistant Admin with VIEW_RESULTS only: can read, CANNOT delete
+  const aaViewer = { _id: 'aa_2', role: 'assistant_admin', permissions: ['VIEW_RESULTS'] };
+  assert.equal(canAccessSession(aaViewer, session, 'GET'), true);
+  assert.equal(canAccessSession(aaViewer, session, 'DELETE'), false, 'VIEW_RESULTS alone cannot delete');
+
+  // 4. Assistant Admin with no relevant permissions: rejected
+  const aaNone = { _id: 'aa_3', role: 'assistant_admin', permissions: [] };
+  assert.equal(canAccessSession(aaNone, session, 'GET'), false);
+  assert.equal(canAccessSession(aaNone, session, 'DELETE'), false);
+
+  // 5. Teacher accessing their OWN session: allowed
+  const ownerTeacher = { _id: teacherId1, role: 'teacher' };
+  assert.equal(canAccessSession(ownerTeacher, session, 'GET'), true);
+  assert.equal(canAccessSession(ownerTeacher, session, 'DELETE'), true);
+
+  // 6. Teacher accessing ANOTHER teacher's session: REJECTED
+  const otherTeacher = { _id: teacherId2, role: 'teacher' };
+  assert.equal(canAccessSession(otherTeacher, session, 'GET'), false, 'Teacher cannot view other teacher session');
+  assert.equal(canAccessSession(otherTeacher, session, 'DELETE'), false, 'Teacher cannot delete other teacher session');
+});

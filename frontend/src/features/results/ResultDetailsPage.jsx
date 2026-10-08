@@ -115,7 +115,7 @@ export default function ResultDetailsPage() {
               {result.examName || result.examType} — {result.academicYear}
             </p>
             <p className="text-sm text-slate-500">
-              Class {result.class}{result.section ? ` - ${result.section}` : ''} • {new Date(result.resultDate).toLocaleDateString()}
+              Class {result.class}{result.group ? ` (${result.group})` : ''}{result.section ? ` - ${result.section}` : ''} • {new Date(result.resultDate).toLocaleDateString()}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -281,7 +281,7 @@ export default function ResultDetailsPage() {
         onConfirm={handlePermanentDelete}
         title="Permanently Delete Finalized Result?"
         examName={result.examName || result.examType}
-        targetName={`Class ${result.class}${result.section ? ` - ${result.section}` : ''}`}
+        targetName={`Class ${result.class}${result.group ? ` (${result.group})` : ''}${result.section ? ` - ${result.section}` : ''}`}
         targetLabel="Class"
         isEntireExam={false}
         busy={deleteBusy}

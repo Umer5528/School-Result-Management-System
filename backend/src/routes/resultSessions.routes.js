@@ -19,7 +19,7 @@ const regenerateTokenLimiter = rateLimit({
 });
 
 router.use(authenticateUser);
-router.use(requireRole('teacher'));
+router.use(requireRole('teacher', 'assistant_admin', 'super_admin'));
 
 router.get('/', controller.listSessions);
 router.post('/', validate(createSessionSchema), controller.createSession);

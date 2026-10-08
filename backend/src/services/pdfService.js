@@ -50,7 +50,7 @@ function generateResultPdf(result, res) {
       .fontSize(9)
       .font('Helvetica')
       .text(
-        `Class: ${result.class}${result.section ? ' - ' + result.section : ''}    Date: ${new Date(
+        `Class: ${result.class}${result.group ? ' (' + result.group + ')' : ''}${result.section ? ' - ' + result.section : ''}    Date: ${new Date(
           result.resultDate
         ).toLocaleDateString()}    Teacher: ${result.teacherNameSnapshot}`,
         { align: 'center' }

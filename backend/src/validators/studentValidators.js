@@ -10,6 +10,7 @@ const studentSchema = z.object({
   name: z.string().min(1),
   fatherName: emptyToUndefined(z.string()),
   class: z.string().min(1),
+  group: emptyToUndefined(z.string()),
   section: emptyToUndefined(z.string()),
   academicYear: z.string().min(1),
   studentId: emptyToUndefined(z.string()),
@@ -19,6 +20,7 @@ const updateStudentSchema = studentSchema.partial();
 
 const bulkImportSchema = z.object({
   class: z.string().min(1),
+  group: z.string().optional(),
   section: z.string().optional(),
   academicYear: z.string().min(1),
   students: z

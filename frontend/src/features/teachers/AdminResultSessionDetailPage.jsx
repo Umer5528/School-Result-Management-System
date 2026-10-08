@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { CheckCircle2, ChevronDown, ChevronUp, Clock, Copy, Lock, Trash2 } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronUp, Clock, Copy, Lock, RefreshCw, Share2, Trash2 } from 'lucide-react';
 import { teachersApi } from '../../api/teachersApi';
 import { resultSessionsApi } from '../../api/resultSessionsApi';
 import { useAuth } from '../../context/AuthContext';
@@ -13,9 +13,24 @@ import ProgressBar from '../../components/ui/ProgressBar';
 import StatusBadge from '../../components/ui/StatusBadge';
 import PermanentDeleteModal from '../../components/ui/PermanentDeleteModal';
 
+function submissionUrl(token) {
+  return `${window.location.origin}/submit/${token}`;
+}
+
 function copy(text, label) {
   navigator.clipboard.writeText(text);
   toast.success(`${label} copied`);
+}
+
+async function shareLink(subjectName, token) {
+  const url = submissionUrl(token);
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: `${subjectName} Result Submission`, url });
+    } catch {}
+  } else {
+    copy(url, 'Link');
+  }
 }
 
 export default function AdminResultSessionDetailPage() {
@@ -87,6 +102,38 @@ export default function AdminResultSessionDetailPage() {
       load();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to disable link');
+    } finally {
+      setRowBusy(null);
+    }
+  }
+
+  async function handleEnable(subjectId) {
+    setRowBusy(subjectId);
+    try {
+      await teachersApi.enableSubjectLink(id, sessionId, subjectId);
+      toast.success('Link re-enabled');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to re-enable link');
+    } finally {
+      setRowBusy(null);
+    }
+  }
+
+  async function handleRegenerate(subjectId, name) {
+    if (
+      !window.confirm(
+        `Generate a new link for ${name}? The old link will stop working immediately. Existing submitted marks remain safe.`
+      )
+    )
+      return;
+    setRowBusy(subjectId);
+    try {
+      await teachersApi.regenerateSubjectToken(id, sessionId, subjectId);
+      toast.success('New link generated');
+      load();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to regenerate link');
     } finally {
       setRowBusy(null);
     }
@@ -313,7 +360,7 @@ export default function AdminResultSessionDetailPage() {
 
                   {subj.submissionToken && (
                     <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-2 border border-slate-100 text-xs">
-                      <span className="font-semibold text-slate-500">Subject Token:</span>
+                      <span className="font-semibold text-slate-500">Unified Link:</span>
                       <code className="rounded bg-white px-2 py-0.5 font-mono font-bold text-slate-800 border border-slate-200">
                         {subj.submissionToken}
                       </code>
@@ -321,16 +368,48 @@ export default function AdminResultSessionDetailPage() {
                         onClick={() => copy(subj.submissionToken, 'Token')}
                         className="text-slate-400 hover:text-slate-700 flex items-center gap-0.5"
                       >
-                        <Copy size={12} /> Copy
+                        <Copy size={12} /> Copy Code
                       </button>
-                      {canManage && subj.linkStatus !== 'DISABLED' && (
+                      <button
+                        onClick={() => copy(submissionUrl(subj.submissionToken), 'Link URL')}
+                        className="font-semibold text-brand-600 hover:underline flex items-center gap-0.5"
+                      >
+                        Copy URL
+                      </button>
+                      <button
+                        onClick={() => shareLink(subj.name, subj.submissionToken)}
+                        className="font-semibold text-brand-600 hover:underline flex items-center gap-0.5"
+                      >
+                        <Share2 size={12} /> Share
+                      </button>
+                      {canManage && (
                         <button
-                          onClick={() => handleDisable(subj._id)}
-                          disabled={isBusy}
-                          className="ml-auto font-semibold text-red-500 hover:underline"
+                          onClick={() => handleRegenerate(subj._id, subj.name)}
+                          disabled={rowBusy === subj._id}
+                          className="text-slate-500 hover:text-slate-800 flex items-center gap-0.5"
+                          title="Generate a new secure token for this subject"
                         >
-                          Disable Link
+                          <RefreshCw size={12} /> New Link
                         </button>
+                      )}
+                      {canManage && (
+                        subj.linkStatus === 'DISABLED' ? (
+                          <button
+                            onClick={() => handleEnable(subj._id)}
+                            disabled={rowBusy === subj._id}
+                            className="ml-auto font-semibold text-emerald-600 hover:underline"
+                          >
+                            Re-enable
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleDisable(subj._id)}
+                            disabled={rowBusy === subj._id}
+                            className="ml-auto font-semibold text-red-500 hover:underline"
+                          >
+                            Disable Link
+                          </button>
+                        )
                       )}
                     </div>
                   )}

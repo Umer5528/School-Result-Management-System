@@ -3,13 +3,14 @@ const { ResultSession, Student, SubjectSubmission, Result } = require('../models
 const AppError = require('../utils/appError');
 const { ok } = require('../utils/apiResponse');
 const { validateSubjects, validateSubmissionMarks, calculateResult } = require('../services/resultCalculationService');
-const { generateSubmissionToken } = require('../utils/submissionToken');
+const { generateSubmissionToken, hashToken } = require('../utils/submissionToken');
 const { logActivity } = require('../services/activityLogService');
 const {
   attachSubmissionStatus,
   attachSubmissionCounts,
   buildSubmissionView,
   normalizeClasses,
+  formatDisplayName,
 } = require('../services/resultSessionViewService');
 const { rememberClassProfile } = require('./classProfileController');
 const { paginationParams, paginatedResponse } = require('../utils/pagination');
@@ -17,15 +18,35 @@ const { paginationParams, paginatedResponse } = require('../utils/pagination');
 // Owner filter: allows owner or admins with manage permissions
 function sessionAccessFilter(req, extra = {}) {
   const user = req.user;
-  if (user.role === 'super_admin' || (user.role === 'assistant_admin' && (user.permissions || []).includes('MANAGE_RESULTS'))) {
+  if (user.role === 'super_admin' || (user.role === 'assistant_admin' && (user.permissions || []).includes('VIEW_RESULTS'))) {
     return extra;
   }
   return { createdBy: user._id, ...extra };
 }
 
 async function getSessionOrThrow(req) {
-  const session = await ResultSession.findOne(sessionAccessFilter(req, { _id: req.params.id }));
+  const session = await ResultSession.findById(req.params.id);
   if (!session) throw new AppError('Result session not found', 404);
+
+  const user = req.user;
+  const isOwner = session.createdBy.toString() === user._id.toString();
+  const isAdminView =
+    user.role === 'super_admin' ||
+    (user.role === 'assistant_admin' && (user.permissions || []).includes('VIEW_RESULTS'));
+  const isAdminManage =
+    user.role === 'super_admin' ||
+    (user.role === 'assistant_admin' && (user.permissions || []).includes('MANAGE_RESULTS'));
+
+  if (req.method === 'GET') {
+    if (!isOwner && !isAdminView && !isAdminManage) {
+      throw new AppError('You do not have access to this result session', 403);
+    }
+  } else {
+    if (!isOwner && !isAdminManage) {
+      throw new AppError('You do not have permission to modify this result session', 403);
+    }
+  }
+
   return session;
 }
 
@@ -41,62 +62,135 @@ async function generateUniqueSubjectToken() {
 }
 
 /**
- * Creates one exam session for one or multiple classes at the same time.
- * Snapshots the selected students with class references.
+ * Creates one exam session for one or multiple classes/groups.
+ * Each class/group combination can have its own independent subjects configured.
  */
 async function createSession(req, res) {
-  const { studentIds, subjects, classes: inputClasses, ...meta } = req.body;
+  const { studentIds, subjects: topLevelSubjects, classes: inputClasses, ...meta } = req.body;
 
   const students = await Student.find({ _id: { $in: studentIds }, createdBy: req.user._id, active: true });
   if (students.length !== studentIds.length) {
     throw new AppError('One or more selected students were not found in your roster', 400);
   }
 
-  validateSubjects(subjects);
-
-  // Normalize classes
+  // Normalize classes and their subjects
   let rawClasses = [];
   if (Array.isArray(inputClasses) && inputClasses.length > 0) {
-    rawClasses = inputClasses.map((c) =>
-      typeof c === 'string'
-        ? { name: c.trim(), section: '' }
-        : { name: c.name.trim(), section: (c.section || '').trim() }
-    );
+    rawClasses = inputClasses.map((c) => {
+      if (typeof c === 'string') {
+        return { name: c.trim(), group: '', section: '', subjects: [] };
+      }
+      return {
+        name: (c.name || '').trim(),
+        group: (c.group || '').trim(),
+        section: (c.section || '').trim(),
+        displayName: c.displayName ? c.displayName.trim() : undefined,
+        subjects: Array.isArray(c.subjects) ? c.subjects : [],
+      };
+    });
   } else if (meta.class) {
-    rawClasses = [{ name: meta.class.trim(), section: (meta.section || '').trim() }];
+    rawClasses = [
+      {
+        name: meta.class.trim(),
+        group: (meta.group || '').trim(),
+        section: (meta.section || '').trim(),
+        subjects: topLevelSubjects || [],
+      },
+    ];
   } else {
-    const uniqueClassNames = [...new Set(students.map((s) => s.class))];
-    rawClasses = uniqueClassNames.map((name) => ({ name, section: '' }));
+    // Group students by class and group
+    const seenCombos = new Map();
+    students.forEach((s) => {
+      const key = `${s.class}|${s.group || ''}|${s.section || ''}`;
+      if (!seenCombos.has(key)) {
+        seenCombos.set(key, { name: s.class, group: s.group || '', section: s.section || '', subjects: [] });
+      }
+    });
+    rawClasses = Array.from(seenCombos.values());
   }
 
-  const classDocs = rawClasses.map((c) => ({
-    _id: new mongoose.Types.ObjectId(),
-    name: c.name,
-    section: c.section || '',
-    finalResultId: null,
-  }));
+  // Build classDocs with validated per-class subjects
+  const classDocs = rawClasses.map((c) => {
+    const classId = new mongoose.Types.ObjectId();
+    const candidateSubjects =
+      Array.isArray(c.subjects) && c.subjects.length > 0 ? c.subjects : topLevelSubjects || [];
 
-  const classMapByName = new Map(classDocs.map((c) => [c.name, c._id]));
+    if (candidateSubjects.length > 0) {
+      validateSubjects(candidateSubjects);
+    }
 
-  const sessionStudents = students.map((s) => ({
-    rollNumber: s.rollNumber,
-    name: s.name,
-    fatherName: s.fatherName,
-    class: s.class,
-    section: s.section || '',
-    classId: classMapByName.get(s.class) || classDocs[0]?._id,
-    studentId: s._id,
-  }));
+    const classSubjs = candidateSubjects.map((s) => ({
+      _id: new mongoose.Types.ObjectId(),
+      name: s.name.trim(),
+      totalMarks: Number(s.totalMarks),
+      passingMarks: Number(s.passingMarks),
+      allowSubmitterConfig: !!s.allowSubmitterConfig,
+    }));
+
+    return {
+      _id: classId,
+      name: c.name,
+      group: c.group || '',
+      section: c.section || '',
+      displayName: formatDisplayName(c),
+      subjects: classSubjs,
+      finalResultId: null,
+    };
+  });
+
+  // Verify that every class has at least one subject configured
+  for (const c of classDocs) {
+    if (!c.subjects || c.subjects.length === 0) {
+      throw new AppError(`Class/group ${c.displayName || c.name} must have at least one subject configured`, 400);
+    }
+  }
+
+  // Match students to the correct class/group combination
+  const sessionStudents = students.map((s) => {
+    const matchedClass =
+      classDocs.find((c) => {
+        if (c.name !== s.class) return false;
+        if (c.group && s.group && c.group !== s.group) return false;
+        if (c.section && s.section && c.section !== s.section) return false;
+        return true;
+      }) ||
+      classDocs.find((c) => c.name === s.class) ||
+      classDocs[0];
+
+    return {
+      rollNumber: s.rollNumber,
+      name: s.name,
+      fatherName: s.fatherName,
+      class: s.class,
+      group: s.group || matchedClass?.group || '',
+      section: s.section || matchedClass?.section || '',
+      classId: matchedClass?._id,
+      studentId: s._id,
+    };
+  });
+
+  // Aggregated unique subjects list across all classes
+  const uniqueSubjsMap = new Map();
+  classDocs.forEach((c) => {
+    c.subjects.forEach((s) => {
+      const key = s.name.trim().toLowerCase();
+      if (!uniqueSubjsMap.has(key)) {
+        uniqueSubjsMap.set(key, s);
+      }
+    });
+  });
+  const aggregatedSubjects = Array.from(uniqueSubjsMap.values());
 
   const session = await ResultSession.create({
     ...meta,
     createdBy: req.user._id,
     teacherNameSnapshot: req.user.name,
-    class: classDocs.map((c) => c.name).join(', '),
+    class: classDocs.map((c) => c.displayName || c.name).join(', '),
+    group: classDocs.length === 1 ? classDocs[0].group : '',
     section: classDocs.length === 1 ? classDocs[0].section : '',
     classes: classDocs,
     students: sessionStudents,
-    subjects,
+    subjects: aggregatedSubjects,
     submissionStatus: 'OFF',
   });
 
@@ -106,22 +200,25 @@ async function createSession(req, res) {
     targetType: 'ResultSession',
     targetId: session._id,
     metadata: {
-      classes: classDocs.map((c) => c.name),
+      classes: classDocs.map((c) => c.displayName || c.name),
       examType: session.examType,
       students: students.length,
-      subjects: subjects.length,
+      subjects: aggregatedSubjects.length,
     },
   });
 
-  // Best-effort class profile remembering
+  // Remember class profile
   classDocs.forEach((c) => {
-    const classStudentSubset = students.filter((s) => s.class === c.name);
+    const classStudentSubset = students.filter(
+      (s) => s.class === c.name && (!c.group || s.group === c.group)
+    );
     rememberClassProfile({
       teacherId: req.user._id,
       class: c.name,
+      group: c.group,
       section: c.section,
       schoolInfo: session.schoolInfo,
-      subjects,
+      subjects: c.subjects,
       students: classStudentSubset,
     });
   });
@@ -150,8 +247,8 @@ async function getSession(req, res) {
 }
 
 /**
- * Activates submission: provisions ONE SubjectSubmission per subject in the exam.
- * Each SubjectSubmission tracks classSubmissions for each class in the exam.
+ * Activates submission: provisions ONE SubjectSubmission per unique subject across the exam.
+ * Each SubjectSubmission covers ONLY the class/group combinations where that subject is configured.
  */
 async function activateSession(req, res) {
   const session = await getSessionOrThrow(req);
@@ -164,52 +261,109 @@ async function activateSession(req, res) {
 
   const normClasses = normalizeClasses(session);
   const existing = await SubjectSubmission.find({ resultSession: session._id });
-  const bySubjectId = new Map(existing.map((s) => [s.subjectId.toString(), s]));
+  const bySubjectName = new Map(existing.map((s) => [s.subjectName.trim().toLowerCase(), s]));
+
+  // Find all unique subjects and which classes configured them
+  const uniqueSubjectsMap = new Map();
+  normClasses.forEach((c) => {
+    (c.subjects || []).forEach((s) => {
+      const key = s.name.trim().toLowerCase();
+      if (!uniqueSubjectsMap.has(key)) {
+        uniqueSubjectsMap.set(key, {
+          name: s.name.trim(),
+          classes: [],
+        });
+      }
+      uniqueSubjectsMap.get(key).classes.push({
+        class: c,
+        config: s,
+      });
+    });
+  });
+
+  // Legacy fallback if no per-class subjects
+  if (uniqueSubjectsMap.size === 0 && Array.isArray(session.subjects)) {
+    session.subjects.forEach((s) => {
+      const key = s.name.trim().toLowerCase();
+      uniqueSubjectsMap.set(key, {
+        name: s.name.trim(),
+        classes: normClasses.map((c) => ({ class: c, config: s })),
+      });
+    });
+  }
 
   const created = [];
-  for (const subject of session.subjects) {
-    const existingDoc = bySubjectId.get(subject._id.toString());
+  for (const [key, { name: subjectName, classes: authorizedClassConfigs }] of uniqueSubjectsMap) {
+    const existingDoc = bySubjectName.get(key);
     if (existingDoc) {
-      // Re-activating: ensure all classes exist in classSubmissions
-      normClasses.forEach((c) => {
-        const found = existingDoc.classSubmissions?.find(
-          (cs) => (cs.classId && cs.classId.toString() === c._id.toString()) || cs.className === c.name
+      // Re-activating: ensure authorized classes exist in classSubmissions
+      authorizedClassConfigs.forEach(({ class: c, config }) => {
+        let found = existingDoc.classSubmissions?.find(
+          (cs) =>
+            (cs.classId && cs.classId.toString() === c._id.toString()) ||
+            (cs.className === c.name && (cs.group || '') === (c.group || ''))
         );
         if (!found) {
           existingDoc.classSubmissions.push({
             classId: c._id,
             className: c.name,
+            group: c.group || '',
             section: c.section || '',
+            displayName: c.displayName,
+            subjectConfigId: config._id,
+            totalMarks: config.totalMarks,
+            passingMarks: config.passingMarks,
             status: 'PENDING',
             marks: [],
           });
-        } else if (found.status === 'DISABLED') {
-          found.status = 'PENDING';
+        } else {
+          found.subjectConfigId = config._id;
+          found.totalMarks = config.totalMarks;
+          found.passingMarks = config.passingMarks;
+          if (found.status === 'DISABLED') found.status = 'PENDING';
         }
       });
+
+      // Filter out classes not configured for this subject
+      existingDoc.classSubmissions = existingDoc.classSubmissions.filter((cs) =>
+        authorizedClassConfigs.some(
+          ({ class: c }) =>
+            (cs.classId && cs.classId.toString() === c._id.toString()) ||
+            (cs.className === c.name && (cs.group || '') === (c.group || ''))
+        )
+      );
+
       if (existingDoc.status === 'DISABLED') existingDoc.status = 'PENDING';
       // eslint-disable-next-line no-await-in-loop
       await existingDoc.save();
     } else {
-      // Provision ONE unique link for this subject across all classes
+      // Provision ONE unique link for this subject covering only authorized classes
       // eslint-disable-next-line no-await-in-loop
       const token = await generateUniqueSubjectToken();
-      const classSubmissions = normClasses.map((c) => ({
+      const primaryConfig = authorizedClassConfigs[0]?.config;
+      const classSubmissions = authorizedClassConfigs.map(({ class: c, config }) => ({
         classId: c._id,
         className: c.name,
+        group: c.group || '',
         section: c.section || '',
+        displayName: c.displayName,
+        subjectConfigId: config._id,
+        totalMarks: config.totalMarks,
+        passingMarks: config.passingMarks,
         status: 'PENDING',
         marks: [],
       }));
+
       // eslint-disable-next-line no-await-in-loop
       const doc = await SubjectSubmission.create({
         resultSession: session._id,
-        subjectId: subject._id,
-        subjectName: subject.name,
-        totalMarks: subject.totalMarks,
-        passingMarks: subject.passingMarks,
-        allowSubmitterConfig: subject.allowSubmitterConfig,
+        subjectId: primaryConfig?._id || new mongoose.Types.ObjectId(),
+        subjectName,
+        totalMarks: primaryConfig?.totalMarks || 100,
+        passingMarks: primaryConfig?.passingMarks || 40,
+        allowSubmitterConfig: !!primaryConfig?.allowSubmitterConfig,
         submissionToken: token,
+        tokenHash: hashToken(token),
         classSubmissions,
         status: 'PENDING',
       });
@@ -256,13 +410,43 @@ async function deactivateSession(req, res) {
 
 async function findSubjectLink(req) {
   const session = await getSessionOrThrow(req);
-  const subject = session.subjects.id(req.params.subjectId);
-  if (!subject) throw new AppError('Subject not found in this result session', 404);
+  const subjectIdParam = req.params.subjectId;
 
-  const link = await SubjectSubmission.findOne({ resultSession: session._id, subjectId: subject._id });
+  // Search by subjectId or doc _id or in class subjects
+  let link = await SubjectSubmission.findOne({
+    resultSession: session._id,
+    $or: [{ subjectId: subjectIdParam }, { _id: mongoose.isValidObjectId(subjectIdParam) ? subjectIdParam : null }],
+  });
+
+  let subjectName = link?.subjectName;
+  if (!link) {
+    // Search by subject in session classes
+    for (const c of session.classes || []) {
+      const match = (c.subjects || []).find(
+        (s) => s._id?.toString() === subjectIdParam || s.name === subjectIdParam
+      );
+      if (match) {
+        subjectName = match.name;
+        link = await SubjectSubmission.findOne({
+          resultSession: session._id,
+          subjectName: new RegExp(`^${match.name.trim()}$`, 'i'),
+        });
+        break;
+      }
+    }
+  }
+
   if (!link) {
     throw new AppError("This subject's submission link has not been generated yet. Activate result submission first.", 404);
   }
+
+  const subject = {
+    _id: link.subjectId,
+    name: link.subjectName,
+    totalMarks: link.totalMarks,
+    passingMarks: link.passingMarks,
+  };
+
   return { session, subject, link };
 }
 
@@ -291,7 +475,7 @@ async function enableSubjectLink(req, res) {
     (cs) => cs.status === 'SUBMITTED' || cs.status === 'LOCKED'
   );
   link.status =
-    submittedClasses.length >= (session.classes?.length || 1)
+    submittedClasses.length >= (link.classSubmissions?.length || 1)
       ? 'SUBMITTED'
       : submittedClasses.length > 0
       ? 'IN_PROGRESS'
@@ -311,8 +495,8 @@ async function enableSubjectLink(req, res) {
 
 async function regenerateSubjectToken(req, res) {
   const { session, subject, link } = await findSubjectLink(req);
-  const oldToken = link.submissionToken;
   link.submissionToken = await generateUniqueSubjectToken();
+  link.tokenHash = hashToken(link.submissionToken);
   await link.save();
 
   await logActivity({
@@ -320,55 +504,64 @@ async function regenerateSubjectToken(req, res) {
     action: 'SUBJECT_LINK_TOKEN_REGENERATED',
     targetType: 'ResultSession',
     targetId: session._id,
-    metadata: { subjectId: subject._id, subjectName: subject.name, oldToken, newToken: link.submissionToken },
+    metadata: { subjectId: subject._id, subjectName: subject.name, regenerated: true },
   });
 
   return ok(res, { link }, `New link generated for ${subject.name}. The previous link no longer works.`);
 }
 
-/**
- * Inspection view: per subject or per class within a subject.
- */
 async function getSubjectSubmission(req, res) {
-  const { session, subject, link } = await findSubjectLink(req);
+  const { session, link } = await findSubjectLink(req);
   const classId = req.params.classId || req.query.classId || null;
   return ok(res, { submission: buildSubmissionView(session, link, classId) });
 }
 
-/**
- * Teacher edits marks for a specific class under a subject.
- */
 async function editSubjectSubmission(req, res) {
   const { session, subject, link } = await findSubjectLink(req);
   const classId = req.params.classId || req.body.classId;
 
   const normClasses = normalizeClasses(session);
   const targetClass = classId
-    ? normClasses.find((c) => c._id.toString() === classId.toString() || c.name === classId)
+    ? normClasses.find(
+        (c) =>
+          c._id.toString() === classId.toString() ||
+          c.name === classId ||
+          c.displayName === classId
+      )
     : normClasses[0];
 
   if (!targetClass) throw new AppError('Class not found in this exam session', 404);
 
-  const totalMarks = req.body.totalMarks ?? link.totalMarks;
-  const passingMarks = req.body.passingMarks ?? link.passingMarks;
+  let classSub = link.classSubmissions?.find(
+    (cs) =>
+      (cs.classId && cs.classId.toString() === targetClass._id.toString()) ||
+      (cs.className === targetClass.name && (cs.group || '') === (targetClass.group || ''))
+  );
+
+  const totalMarks = req.body.totalMarks ?? classSub?.totalMarks ?? link.totalMarks;
+  const passingMarks = req.body.passingMarks ?? classSub?.passingMarks ?? link.passingMarks;
   if (passingMarks > totalMarks) throw new AppError('Passing marks cannot exceed total marks', 400);
 
-  const classStudents = session.students.filter(
-    (s) =>
-      (s.classId && s.classId.toString() === targetClass._id.toString()) ||
-      (s.class && s.class === targetClass.name)
-  );
+  const classStudents = session.students.filter((s) => {
+    if (s.classId && s.classId.toString() === targetClass._id.toString()) return true;
+    if (s.class === targetClass.name) {
+      if (!targetClass.group) return true;
+      return s.group === targetClass.group;
+    }
+    return false;
+  });
   const relevantStudents = classStudents.length > 0 ? classStudents : session.students;
   validateSubmissionMarks(relevantStudents, req.body.marks, totalMarks);
 
-  let classSub = link.classSubmissions?.find(
-    (cs) => (cs.classId && cs.classId.toString() === targetClass._id.toString()) || cs.className === targetClass.name
-  );
   if (!classSub) {
     classSub = {
       classId: targetClass._id,
       className: targetClass.name,
+      group: targetClass.group || '',
       section: targetClass.section || '',
+      displayName: targetClass.displayName,
+      totalMarks,
+      passingMarks,
       status: 'SUBMITTED',
       marks: req.body.marks,
       submittedVia: 'teacher',
@@ -378,6 +571,8 @@ async function editSubjectSubmission(req, res) {
   } else {
     if (classSub.status === 'LOCKED') throw new AppError('Unlock this class before editing its marks', 400);
     classSub.marks = req.body.marks;
+    classSub.totalMarks = totalMarks;
+    classSub.passingMarks = passingMarks;
     classSub.status = 'SUBMITTED';
     classSub.submittedVia = 'teacher';
     classSub.submittedAt = new Date();
@@ -385,7 +580,6 @@ async function editSubjectSubmission(req, res) {
 
   link.totalMarks = totalMarks;
   link.passingMarks = passingMarks;
-  // Also keep top level marks for legacy
   link.marks = req.body.marks;
   link.submittedVia = 'teacher';
   link.submittedAt = new Date();
@@ -401,6 +595,7 @@ async function editSubjectSubmission(req, res) {
       subjectName: subject.name,
       classId: targetClass._id,
       className: targetClass.name,
+      group: targetClass.group || '',
       studentCount: req.body.marks.length,
     },
   });
@@ -408,28 +603,30 @@ async function editSubjectSubmission(req, res) {
   return ok(res, { submission: link }, 'Marks updated');
 }
 
-/**
- * Reopens a specific class submission for a subject.
- * Clears only that class's marks and sets its status back to PENDING.
- * The same link can then be used to submit again for that class.
- */
 async function reopenSubjectSubmission(req, res) {
   const { session, subject, link } = await findSubjectLink(req);
   const classId = req.params.classId || req.query.classId || req.body?.classId;
 
   const normClasses = normalizeClasses(session);
   const targetClass = classId
-    ? normClasses.find((c) => c._id.toString() === classId.toString() || c.name === classId)
+    ? normClasses.find(
+        (c) =>
+          c._id.toString() === classId.toString() ||
+          c.name === classId ||
+          c.displayName === classId
+      )
     : normClasses[0];
 
   if (!targetClass) throw new AppError('Class not found in this exam session', 404);
 
   const classSub = link.classSubmissions?.find(
-    (cs) => (cs.classId && cs.classId.toString() === targetClass._id.toString()) || cs.className === targetClass.name
+    (cs) =>
+      (cs.classId && cs.classId.toString() === targetClass._id.toString()) ||
+      (cs.className === targetClass.name && (cs.group || '') === (targetClass.group || ''))
   );
 
   if (!classSub || classSub.status === 'PENDING') {
-    throw new AppError(`${targetClass.name} has not been submitted yet`, 400);
+    throw new AppError(`${targetClass.displayName || targetClass.name} has not been submitted yet`, 400);
   }
   if (classSub.status === 'LOCKED') {
     throw new AppError('Unlock this class before reopening it', 400);
@@ -448,6 +645,7 @@ async function reopenSubjectSubmission(req, res) {
       subjectName: subject.name,
       classId: targetClass._id,
       className: targetClass.name,
+      group: targetClass.group || '',
       clearedMarksCount: clearedMarks.length,
       clearedAt,
     },
@@ -458,14 +656,17 @@ async function reopenSubjectSubmission(req, res) {
   classSub.submittedAt = null;
   classSub.submittedVia = null;
 
-  // Update overall link status
   const submittedClasses = link.classSubmissions.filter(
     (cs) => cs.status === 'SUBMITTED' || cs.status === 'LOCKED'
   );
   link.status = submittedClasses.length > 0 ? 'IN_PROGRESS' : 'PENDING';
   await link.save();
 
-  return ok(res, { link }, `${targetClass.name} ${subject.name} reopened. The same link can be used to submit it again.`);
+  return ok(
+    res,
+    { link },
+    `${targetClass.displayName || targetClass.name} ${subject.name} reopened. The same link can be used to submit it again.`
+  );
 }
 
 async function setSubjectLock(req, res, locked) {
@@ -500,8 +701,9 @@ const lockSubject = (req, res) => setSubjectLock(req, res, true);
 const unlockSubject = (req, res) => setSubjectLock(req, res, false);
 
 /**
- * Generates final result independently for one class.
- * Enforces that all required subjects for this class are SUBMITTED or LOCKED.
+ * Generates final result independently for one class/group configuration.
+ * Enforces that all required subjects for this specific class/group are SUBMITTED or LOCKED.
+ * Calculates rankings, total max marks, and pass/fail strictly within this class/group.
  */
 async function generateClassFinalResult(req, res) {
   const session = await getSessionOrThrow(req);
@@ -509,76 +711,111 @@ async function generateClassFinalResult(req, res) {
   const classId = req.params.classId || req.body.classId;
 
   const targetClass = normClasses.find(
-    (c) => c._id.toString() === classId.toString() || c.name === classId
+    (c) =>
+      c._id.toString() === classId.toString() ||
+      c.name === classId ||
+      c.displayName === classId
   );
   if (!targetClass) {
     throw new AppError('Class not found in this exam session', 404);
   }
 
   if (targetClass.finalResultId) {
-    throw new AppError(`The result for ${targetClass.name} has already been finalized`, 400);
+    throw new AppError(`The result for ${targetClass.displayName || targetClass.name} has already been finalized`, 400);
   }
 
-  // Check every subject in the session has a completed submission for this class
+  // Get subjects configured specifically for this class/group
+  const classRequiredSubjects =
+    targetClass.subjects && targetClass.subjects.length > 0 ? targetClass.subjects : session.subjects;
+
   const links = await SubjectSubmission.find({ resultSession: session._id }).lean();
   const pendingSubjects = [];
 
-  links.forEach((link) => {
-    let classSub = link.classSubmissions?.find(
-      (cs) => (cs.classId && cs.classId.toString() === targetClass._id.toString()) || cs.className === targetClass.name
+  classRequiredSubjects.forEach((s) => {
+    const link = links.find(
+      (l) =>
+        l.subjectName.trim().toLowerCase() === s.name.trim().toLowerCase() ||
+        l.subjectId.toString() === s._id?.toString()
     );
-    const isDone = classSub ? classSub.status === 'SUBMITTED' || classSub.status === 'LOCKED' : link.status === 'SUBMITTED' || link.status === 'LOCKED';
+    if (!link) {
+      pendingSubjects.push(s.name);
+      return;
+    }
+    const classSub = link.classSubmissions?.find(
+      (cs) =>
+        (cs.classId && cs.classId.toString() === targetClass._id.toString()) ||
+        (cs.className === targetClass.name && (cs.group || '') === (targetClass.group || ''))
+    );
+    const isDone = classSub
+      ? classSub.status === 'SUBMITTED' || classSub.status === 'LOCKED'
+      : link.status === 'SUBMITTED' || link.status === 'LOCKED';
     if (!isDone) {
-      pendingSubjects.push(link.subjectName);
+      pendingSubjects.push(s.name);
     }
   });
 
   if (pendingSubjects.length > 0) {
     throw new AppError(
-      `Cannot finalize ${targetClass.name}. ${pendingSubjects.length} subject(s) still pending: ${pendingSubjects.join(', ')}`,
+      `Cannot finalize ${targetClass.displayName || targetClass.name}. ${pendingSubjects.length} subject(s) still pending: ${pendingSubjects.join(', ')}`,
       400
     );
   }
 
-  const subjects = session.subjects.map((s) => {
-    const link = links.find((l) => l.subjectId.toString() === s._id.toString());
-    return {
-      name: s.name,
-      totalMarks: link ? link.totalMarks : s.totalMarks,
-      passingMarks: link ? link.passingMarks : s.passingMarks,
-    };
-  });
-
+  // Build marks map strictly from submissions of this class
   const marksByRollAndSubject = new Map();
   links.forEach((link) => {
-    let classSub = link.classSubmissions?.find(
-      (cs) => (cs.classId && cs.classId.toString() === targetClass._id.toString()) || cs.className === targetClass.name
+    const classSub = link.classSubmissions?.find(
+      (cs) =>
+        (cs.classId && cs.classId.toString() === targetClass._id.toString()) ||
+        (cs.className === targetClass.name && (cs.group || '') === (targetClass.group || ''))
     );
     const marksList = classSub?.marks || link.marks || [];
     marksList.forEach((m) => {
-      marksByRollAndSubject.set(`${m.rollNumber}|${link.subjectName}`, m.obtained);
+      marksByRollAndSubject.set(`${m.rollNumber}|${link.subjectName.trim().toLowerCase()}`, m.obtained);
     });
   });
 
-  const classStudents = session.students.filter(
-    (s) =>
-      (s.classId && s.classId.toString() === targetClass._id.toString()) ||
-      (s.class && s.class === targetClass.name)
-  );
+  // Filter students strictly belonging to this class/group
+  const classStudents = session.students.filter((s) => {
+    if (s.classId && s.classId.toString() === targetClass._id.toString()) return true;
+    if (s.class === targetClass.name) {
+      if (!targetClass.group) return true;
+      return s.group === targetClass.group;
+    }
+    return false;
+  });
   const studentsToCalculate = classStudents.length > 0 ? classStudents : session.students;
+
+  const subjectsForCalc = classRequiredSubjects.map((s) => {
+    const link = links.find(
+      (l) =>
+        l.subjectName.trim().toLowerCase() === s.name.trim().toLowerCase() ||
+        l.subjectId.toString() === s._id?.toString()
+    );
+    const classSub = link?.classSubmissions?.find(
+      (cs) =>
+        (cs.classId && cs.classId.toString() === targetClass._id.toString()) ||
+        (cs.className === targetClass.name && (cs.group || '') === (targetClass.group || ''))
+    );
+    return {
+      name: s.name,
+      totalMarks: classSub?.totalMarks ?? link?.totalMarks ?? s.totalMarks,
+      passingMarks: classSub?.passingMarks ?? link?.passingMarks ?? s.passingMarks,
+    };
+  });
 
   const students = studentsToCalculate.map((s) => ({
     rollNumber: s.rollNumber,
     name: s.name,
     fatherName: s.fatherName,
-    marks: subjects.map((subj) => ({
+    marks: subjectsForCalc.map((subj) => ({
       subject: subj.name,
-      obtained: marksByRollAndSubject.get(`${s.rollNumber}|${subj.name}`) ?? 0,
+      obtained: marksByRollAndSubject.get(`${s.rollNumber}|${subj.name.trim().toLowerCase()}`) ?? 0,
     })),
   }));
 
   const { students: calculatedStudents, statistics } = calculateResult({
-    subjects,
+    subjects: subjectsForCalc,
     students,
     expectedStrength: studentsToCalculate.length,
   });
@@ -590,12 +827,13 @@ async function generateClassFinalResult(req, res) {
     sourceSessionClassId: targetClass._id,
     schoolInfo: session.schoolInfo,
     class: targetClass.name,
+    group: targetClass.group || '',
     section: targetClass.section || '',
     academicYear: session.academicYear,
     examType: session.examType,
     examName: session.examName,
     resultDate: session.resultDate,
-    subjects,
+    subjects: subjectsForCalc,
     students: calculatedStudents,
     statistics,
   });
@@ -605,9 +843,8 @@ async function generateClassFinalResult(req, res) {
   if (sessionClassEntry) {
     sessionClassEntry.finalResultId = result._id;
   }
-  session.finalResultId = result._id; // Most recent finalized result
+  session.finalResultId = result._id;
 
-  // Check if all classes are now finalized
   const allFinalized = normClasses.every((c) => {
     if (c._id.toString() === targetClass._id.toString()) return true;
     return !!c.finalResultId;
@@ -625,16 +862,14 @@ async function generateClassFinalResult(req, res) {
     metadata: {
       resultId: result._id,
       class: targetClass.name,
+      group: targetClass.group || '',
       studentCount: statistics.totalStudents,
     },
   });
 
-  return ok(res, { result }, `Final result for ${targetClass.name} generated successfully`, 201);
+  return ok(res, { result }, `Final result for ${targetClass.displayName || targetClass.name} generated successfully`, 201);
 }
 
-/**
- * Legacy or single-class helper for generateFinalResult
- */
 async function generateFinalResult(req, res) {
   const session = await getSessionOrThrow(req);
   const normClasses = normalizeClasses(session);
@@ -644,25 +879,31 @@ async function generateFinalResult(req, res) {
 }
 
 /**
- * Permanently deletes ONE class's result data from an exam session.
- * Removes class marks, subject class submissions, class from session, and finalized Result doc.
- * Master Student records are NEVER touched!
+ * Permanently deletes ONE class/group result data from an exam session.
+ * Removes its subject submissions, marks, and finalized result doc.
+ * Master Student records and other groups in the exam are NEVER touched!
  */
 async function deleteClassResultPermanently(req, res) {
   const session = await getSessionOrThrow(req);
   const normClasses = normalizeClasses(session);
   const targetClass = normClasses.find(
-    (c) => c._id.toString() === req.params.classId || c.name === req.params.classId
+    (c) =>
+      c._id.toString() === req.params.classId ||
+      c.name === req.params.classId ||
+      c.displayName === req.params.classId
   );
   if (!targetClass) {
     throw new AppError('Class not found in this exam session', 404);
   }
 
-  const affectedStudents = session.students.filter(
-    (s) =>
-      (s.classId && s.classId.toString() === targetClass._id.toString()) ||
-      (s.class && s.class === targetClass.name)
-  );
+  const affectedStudents = session.students.filter((s) => {
+    if (s.classId && s.classId.toString() === targetClass._id.toString()) return true;
+    if (s.class === targetClass.name) {
+      if (!targetClass.group) return true;
+      return s.group === targetClass.group;
+    }
+    return false;
+  });
 
   // 1. Audit log BEFORE deletion
   await logActivity({
@@ -673,10 +914,11 @@ async function deleteClassResultPermanently(req, res) {
     metadata: {
       examName: session.examName || session.examType,
       class: targetClass.name,
+      group: targetClass.group || '',
       section: targetClass.section || '',
       studentCount: affectedStudents.length,
-      affectedSubjectCount: session.subjects.length,
-      scope: 'CLASS_RESULT',
+      affectedSubjectCount: (targetClass.subjects || session.subjects || []).length,
+      scope: 'CLASS_GROUP_RESULT',
     },
   });
 
@@ -686,7 +928,10 @@ async function deleteClassResultPermanently(req, res) {
   }
   await Result.deleteMany({
     sourceSessionId: session._id,
-    $or: [{ sourceSessionClassId: targetClass._id }, { class: targetClass.name }],
+    $or: [
+      { sourceSessionClassId: targetClass._id },
+      { class: targetClass.name, group: targetClass.group || '' },
+    ],
   });
 
   // 3. Remove classSubmissions entries for this class across all SubjectSubmissions
@@ -695,25 +940,32 @@ async function deleteClassResultPermanently(req, res) {
     {
       $pull: {
         classSubmissions: {
-          $or: [{ classId: targetClass._id }, { className: targetClass.name }],
+          $or: [
+            { classId: targetClass._id },
+            { className: targetClass.name, group: targetClass.group || '' },
+          ],
         },
       },
     }
   );
 
-  // 4. Remove students of this class from session
-  session.students = session.students.filter(
-    (s) =>
-      !(
-        (s.classId && s.classId.toString() === targetClass._id.toString()) ||
-        (s.class && s.class === targetClass.name)
-      )
-  );
+  // If any SubjectSubmission now has 0 classSubmissions, delete it (no classes remaining with this subject)
+  await SubjectSubmission.deleteMany({
+    resultSession: session._id,
+    classSubmissions: { $size: 0 },
+  });
+
+  // 4. Remove students of this class/group from session
+  session.students = session.students.filter((s) => {
+    if (s.classId && s.classId.toString() === targetClass._id.toString()) return false;
+    if (s.class === targetClass.name && (!targetClass.group || s.group === targetClass.group)) return false;
+    return true;
+  });
 
   // 5. Remove class from session.classes
   if (session.classes && session.classes.length > 0) {
     session.classes = session.classes.filter(
-      (c) => c._id.toString() !== targetClass._id.toString() && c.name !== targetClass.name
+      (c) => c._id.toString() !== targetClass._id.toString()
     );
   }
 
@@ -721,14 +973,14 @@ async function deleteClassResultPermanently(req, res) {
   if (!session.classes || session.classes.length === 0) {
     await SubjectSubmission.deleteMany({ resultSession: session._id });
     await session.deleteOne();
-    return ok(res, null, `${targetClass.name} result and empty session permanently deleted.`);
+    return ok(res, null, `${targetClass.displayName || targetClass.name} result and empty session permanently deleted.`);
   }
 
   // Update summary class name
-  session.class = session.classes.map((c) => c.name).join(', ');
+  session.class = session.classes.map((c) => c.displayName || c.name).join(', ');
   await session.save();
 
-  return ok(res, null, `${targetClass.name} result permanently deleted.`);
+  return ok(res, null, `${targetClass.displayName || targetClass.name} result permanently deleted.`);
 }
 
 /**
@@ -747,7 +999,7 @@ async function deleteEntireExamPermanently(req, res) {
     targetId: session._id,
     metadata: {
       examName: session.examName || session.examType,
-      classes: normClasses.map((c) => c.name),
+      classes: normClasses.map((c) => c.displayName || c.name),
       studentCount: session.students.length,
       affectedSubjectCount: session.subjects.length,
       scope: 'ENTIRE_EXAM',

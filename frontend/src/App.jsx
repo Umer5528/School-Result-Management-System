@@ -37,6 +37,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<LandingPage />} />
       <Route path="/submit" element={<SubmitResultPage />} />
+      <Route path="/submit/:token" element={<SubmitResultPage />} />
 
       <Route element={<AuthLayout />}>
         <Route path="/login" element={user ? <Navigate to="/dashboard" /> : <LoginPage />} />
