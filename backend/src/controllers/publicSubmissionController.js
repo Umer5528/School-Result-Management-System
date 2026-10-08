@@ -287,28 +287,40 @@ async function submitClassMarks(req, res) {
     }
   }
 
-  // 1. Try atomic update if classSubmissions contains this class entry with status PENDING
+  // 1. Try atomic update targeting ONLY the specific class entry using arrayFilters
   let updated = await SubjectSubmission.findOneAndUpdate(
     {
       _id: link._id,
       status: { $ne: 'DISABLED' },
-      'classSubmissions.classId': classSub.classId,
-      'classSubmissions.status': 'PENDING',
+      classSubmissions: {
+        $elemMatch: {
+          classId: classSub.classId,
+          status: 'PENDING',
+        },
+      },
     },
     {
       $set: {
-        'classSubmissions.$.status': 'SUBMITTED',
-        'classSubmissions.$.marks': req.body.marks,
-        'classSubmissions.$.submittedVia': 'public',
-        'classSubmissions.$.submittedAt': new Date(),
-        'classSubmissions.$.totalMarks': totalMarks,
-        'classSubmissions.$.passingMarks': passingMarks,
+        'classSubmissions.$[target].status': 'SUBMITTED',
+        'classSubmissions.$[target].marks': req.body.marks,
+        'classSubmissions.$[target].submittedVia': 'public',
+        'classSubmissions.$[target].submittedAt': new Date(),
+        'classSubmissions.$[target].totalMarks': totalMarks,
+        'classSubmissions.$[target].passingMarks': passingMarks,
       },
     },
-    { new: true }
+    {
+      arrayFilters: [
+        {
+          'target.classId': classSub.classId,
+          'target.status': 'PENDING',
+        },
+      ],
+      new: true,
+    }
   );
 
-  // 2. If no matching entry found, check if it was already submitted/locked
+  // 2. If no matching pending entry found, check if it was already submitted/locked
   if (!updated) {
     const current = await SubjectSubmission.findById(link._id);
     const existingEntry = current?.classSubmissions?.find(
@@ -322,34 +334,36 @@ async function submitClassMarks(req, res) {
       );
     }
 
-    // Fallback for legacy single-class schema
-    updated = await SubjectSubmission.findOneAndUpdate(
-      { _id: link._id, status: 'PENDING' },
-      {
-        $set: {
-          totalMarks,
-          passingMarks,
-          marks: req.body.marks,
-          status: 'SUBMITTED',
-          submittedVia: 'public',
-          submittedAt: new Date(),
-          classSubmissions: [
-            {
-              classId: classSub.classId,
-              className: classSub.className,
-              group: classSub.group || '',
-              section: classSub.section || '',
-              displayName: classSub.displayName,
-              status: 'SUBMITTED',
-              marks: req.body.marks,
-              submittedVia: 'public',
-              submittedAt: new Date(),
-            },
-          ],
+    // Fallback for legacy single-class schema ONLY where classSubmissions was never initialized
+    if (!current?.classSubmissions || current.classSubmissions.length === 0) {
+      updated = await SubjectSubmission.findOneAndUpdate(
+        { _id: link._id, status: 'PENDING' },
+        {
+          $set: {
+            totalMarks,
+            passingMarks,
+            marks: req.body.marks,
+            status: 'SUBMITTED',
+            submittedVia: 'public',
+            submittedAt: new Date(),
+            classSubmissions: [
+              {
+                classId: classSub.classId,
+                className: classSub.className,
+                group: classSub.group || '',
+                section: classSub.section || '',
+                displayName: classSub.displayName,
+                status: 'SUBMITTED',
+                marks: req.body.marks,
+                submittedVia: 'public',
+                submittedAt: new Date(),
+              },
+            ],
+          },
         },
-      },
-      { new: true }
-    );
+        { new: true }
+      );
+    }
   }
 
   if (!updated) {

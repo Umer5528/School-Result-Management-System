@@ -147,10 +147,32 @@ async function findAdminSubjectLink(req) {
   const session = await ResultSession.findOne({ _id: req.params.sessionId, createdBy: req.params.id });
   if (!session) throw new AppError('Result session not found', 404);
 
-  const subject = session.subjects.id(req.params.subjectId);
-  if (!subject) throw new AppError('Subject not found in this result session', 404);
+  let subject = session.subjects.id(req.params.subjectId);
+  let link = null;
 
-  const link = await SubjectSubmission.findOne({ resultSession: session._id, subjectId: subject._id });
+  if (subject) {
+    link = await SubjectSubmission.findOne({ resultSession: session._id, subjectId: subject._id });
+  }
+
+  if (!link) {
+    const mongoose = require('mongoose');
+    link = await SubjectSubmission.findOne({
+      resultSession: session._id,
+      $or: [
+        { subjectId: req.params.subjectId },
+        { _id: mongoose.isValidObjectId(req.params.subjectId) ? req.params.subjectId : null },
+      ],
+    });
+    if (link) {
+      subject = {
+        _id: link.subjectId,
+        name: link.subjectName,
+        totalMarks: link.totalMarks,
+        passingMarks: link.passingMarks,
+      };
+    }
+  }
+
   if (!link) throw new AppError('This subject\'s submission link has not been generated yet', 404);
 
   return { session, subject, link };
@@ -244,7 +266,9 @@ async function adminReopenSubjectSubmission(req, res) {
     : normClasses[0];
 
   const classSub = link.classSubmissions?.find(
-    (cs) => (cs.classId && cs.classId.toString() === targetClass?._id.toString()) || cs.className === targetClass?.name
+    (cs) =>
+      (cs.classId && cs.classId.toString() === targetClass?._id.toString()) ||
+      (cs.className === targetClass?.name && (cs.group || '') === (targetClass?.group || ''))
   );
 
   if (classSub) {
